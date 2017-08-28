@@ -134,12 +134,15 @@ function tap.packet(pinfo,tvb,ip)
 	 f_handle = nil
 	 files[sip_callid_v] = nil
          if(rtp_files[sip_callid_v]) then
-	   for k,rtp_f in pairs(rtp_files[sip_callid_v]) do
-	      rtp_f[1]:flush()
-	      rtp_f[1]:close()
-	      os.execute("./G711orG729-2wav ".. outputdir .. "/" .. tostring(sip_callid_v) .."_"..tostring(k).."."..tostring(rtp_f[2]).." "..tostring(rtp_f[2]))
-              --os.execute("rm ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(rtp_f[2]).." "..tostring(rtp_f[2]))
-	      rtp_f=nil
+	   for k,v in pairs(rtp_files[sip_callid_v]) do
+	      for l,rtp_f in pairs(v) do
+	         rtp_f:flush()
+	         rtp_f:close()
+	         os.execute("./G711orG729-2wav ".. outputdir .. "/" .. tostring(sip_callid_v) .."_"..tostring(k).."."..tostring(l).." "..tostring(l))
+                 --os.execute("rm ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(l).." "..tostring(l))
+	         rtp_f=nil
+	      end
+	      v=nil 
 	   end
 	 end
          rtp_files[sip_callid_v]=nil
@@ -158,18 +161,20 @@ function tap.packet(pinfo,tvb,ip)
     if sdp_frames[rtp_setup_frame.value] then
       if rtp_ssrc and rtp_p_type then
         local first_key = sdp_frames[rtp_setup_frame.value]
-	local second_key = rtp_ssrc.value
 	if not(rtp_files[first_key]) then
 	   rtp_files[first_key]={}
 	end
+	if not(rtp_files[first_key][rtp_ssrc.value]) then
+	   rtp_files[first_key][rtp_ssrc.value]={}
+	end
 	local rtp_file_handle
-	if not(rtp_files[first_key][second_key]) then
-           local my_rtp_name = tostring(first_key).."_"..tostring(second_key).."."..tostring(rtp_p_type.value)
+	if not(rtp_files[first_key][rtp_ssrc.value][rtp_p_type.value]) then
+           local my_rtp_name = tostring(first_key).."_"..tostring(rtp_ssrc.value).."."..tostring(rtp_p_type.value)
 	   rtp_file_handle = assert(io.open(outputdir .. "/" ..my_rtp_name, "wb"))
-	   rtp_files[first_key][second_key]={rtp_file_handle,rtp_p_type.value}
+	   rtp_files[first_key][rtp_ssrc.value][rtp_p_type.value]=rtp_file_handle
 	   print( my_rtp_name )
 	else
-	   rtp_file_handle = rtp_files[first_key][second_key][1]
+	   rtp_file_handle = rtp_files[first_key][rtp_ssrc.value][rtp_p_type.value]
 	end
         if (rtp_file_handle and rtp_payload) then
 	  rtp_file_handle:write(rtp_payload.value:raw())
@@ -191,18 +196,21 @@ end
 -- declare the function to print the progress, not actually necessary
 function tap.draw()
   for call_id,f_handle in pairs(files) do
-    f_handle:flush()
-    f_handle:close()
-    f_handle=nil
-    files[call_id]=nil
+     f_handle:flush()
+     f_handle:close()
+     f_handle=nil
+     files[call_id]=nil
   end
   for k,v in pairs(rtp_files) do
-     for l,rtp_f in pairs(v) do
-        rtp_f[1]:flush()
-        rtp_f[1]:close()
-	os.execute("./G711orG729-2wav ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(rtp_f[2]).." "..tostring(rtp_f[2]))
-        --os.execute("rm ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(rtp_f[2]).." "..tostring(rtp_f[2]))
-        rtp_f=nil
+     for l,vv in pairs(v) do
+        for m,rtp_f in pairs(vv) do
+           rtp_f:flush()
+           rtp_f:close()
+	   os.execute("./G711orG729-2wav ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(m).." "..tostring(m))
+           --os.execute("rm ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(rtp_f[2]).." "..tostring(rtp_f[2]))
+           rtp_f=nil
+	end
+	vv=nil
      end
      rtp_files[k]=nil
   end
@@ -222,17 +230,21 @@ function tap.reset()
   -- close all files at once here, which may be way too late if there are hundreds of calls
   -- and so you may run out of your file handle quota
   for call_id,f_handle in pairs(files) do
-    f_handle:flush()
-    f_handle:close()
-    f_handle=nil
-    files[call_id]=nil
+     f_handle:flush()
+     f_handle:close()
+     f_handle=nil
+     files[call_id]=nil
   end
   for k,v in pairs(rtp_files) do
-     for l,rtp_f in pairs(v) do
-        rtp_f[1]:flush()
-        rtp_f[1]:close()
-	os.execute("G711orG729-2wav ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(rtp_f[2]).." "..tostring(rtp_f[2]))
-        rtp_f=nil
+     for l,vv in pairs(v) do
+        for m,rtp_f in pairs(vv) do
+           rtp_f:flush()
+           rtp_f:close()
+	   os.execute("./G711orG729-2wav ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(m).." "..tostring(m))
+           --os.execute("rm ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(rtp_f[2]).." "..tostring(rtp_f[2]))
+           rtp_f=nil
+	end
+	vv=nil
      end
      rtp_files[k]=nil
   end
