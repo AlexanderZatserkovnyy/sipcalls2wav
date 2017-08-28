@@ -31,7 +31,7 @@ typedef uint16_t uword16_t;
 typedef int32_t word32_t;
 typedef uint32_t uword32_t;
 typedef int64_t word64_t;
-
+  
 /* define the context structure to store all static data for a decoder channel */
 struct bcg729DecoderChannelContextStruct_struct {
 	/*** buffers used in decoder bloc ***/
