@@ -43,7 +43,6 @@ local sdp_connection_info_address_f = Field.new("sdp.connection_info.address")
 local sdp_media_f = Field.new("sdp.media")
 local rtp_p_type_f = Field.new("rtp.p_type")
 local rtp_ssrc_f = Field.new("rtp.ssrc")
-local rtcp_ssrc_identifier_f = Field.new("rtcp.ssrc.identifier")
 local udp_src_f = Field.new("udp.srcport")
 local udp_dst_f = Field.new("udp.dstport")
 local ip_src_f = Field.new("ip.src")
@@ -96,7 +95,6 @@ function tap.packet(pinfo,tvb,ip)
   local rtp_seq = rtp_seq_f() 
 --
   local rtcp_setup_frame = rtcp_setup_frame_f()
-  local rtcp_ssrc_identifier = rtcp_ssrc_identifier_f()
   local t38_setup_frame = t38_setup_frame_f()
 
 -- handle SIP packets
