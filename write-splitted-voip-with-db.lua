@@ -28,9 +28,6 @@ local rtp_setup_frame_f = Field.new("rtp.setup-frame")
 
 local t38_setup_frame_f = Field.new("t38.setup-frame")
 
-local rtcp_setup_frame_f = Field.new("rtcp.setup-frame")
-
-
 local sip_callid_f = Field.new("sip.Call-ID")
 local sip_method_f = Field.new("sip.Method")
 local sip_to_tag_f = Field.new("sip.to.tag")
@@ -54,7 +51,7 @@ local rtp_payload_f = Field.new("rtp.payload")
 local rtp_seq_f = Field.new("rtp.seq")
 
 -- create and register the listener
-local tap = Listener.new("ip", "rtp or rtcp or t38 or (sip and !(sip.CSeq.method == REGISTER) and !(sip.CSeq.method == OPTIONS))")
+local tap = Listener.new("ip", "rtp or t38 or (sip and !(sip.CSeq.method == REGISTER) and !(sip.CSeq.method == OPTIONS))")
 
 -- declare the executive body of the tap
 function tap.packet(pinfo,tvb,ip)
@@ -94,7 +91,6 @@ function tap.packet(pinfo,tvb,ip)
   local rtp_payload = rtp_payload_f()
   local rtp_seq = rtp_seq_f() 
 --
-  local rtcp_setup_frame = rtcp_setup_frame_f()
   local t38_setup_frame = t38_setup_frame_f()
 
 -- handle SIP packets
@@ -125,7 +121,8 @@ function tap.packet(pinfo,tvb,ip)
     local f_handle = files[sip_callid_v]
     if f_handle then
       f_handle:dump_current()
-      if ((tostring(sip_cseq_method) == "BYE" and tostring(sip_status_code) == "200") or 
+      if ((tostring(sip_cseq_method) == "BYE" and tostring(sip_status_code) == "200") or
+          (tostring(sip_cseq_method) == "CANCEL" and tostring(sip_status_code) == "200") or 
           (tostring(sip_cseq_method) == "INVITE" and tostring(sip_status_code) == "487") ) then
 	 f_handle:flush()
          f_handle:close()
@@ -179,10 +176,6 @@ function tap.packet(pinfo,tvb,ip)
 	end
       end
     end
-  end
-
-  if rtcp_setup_frame then
-    handle_media(rtcp_setup_frame.value)
   end
 
   if t38_setup_frame then

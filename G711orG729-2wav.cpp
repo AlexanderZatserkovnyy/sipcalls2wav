@@ -92,7 +92,7 @@ int main( int argc, char** argv ) {
      auto search = codecs.find(argv[2]);
      if(search != codecs.end()) audioFormat=codecs[argv[2]];
      else{
-        cerr << "Usage: " << argv[0] << " <raw-file> [6 (audio-format, default corr. A-low a711 8] [<num-channels> (default 1)] [<sampleRate> (def 8000))] [8 (bps)]" << endl;
+        cerr << "Usage: " << argv[0] << " <raw-file> [8 (audio-format, default corr. A-low a711] [<num-channels> (default 1)] [<sampleRate> (def 8000))] [8 (bps)]" << endl;
 	cerr << "       The parameters are positional, so specify all previous before one needed."<< endl;
         return (-1);
      } 
