@@ -1,34 +1,11 @@
 /* tap-rtp.cpp
- * RTP TAP for tshark
+ * RTP SAVE TAP for tshark
+ * 
+ * Copyright 2017
+ * By Alexander Zatserkovnyy (avz651@gmail.com)
  *
- * Copyright 2008, Ericsson AB
- * By Balint Reczey <balint.reczey@ericsson.com>
- *
- * based on ui/gtk/rtp_stream_dlg.c
- * Copyright 2003, Alcatel Business Systems
- * By Lars Ruoff <lars.ruoff@gmx.net>
- *
- * Wireshark - Network traffic analyzer
- * By Gerald Combs <gerald@wireshark.org>
- * Copyright 1998 Gerald Combs
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- */
-
 /*
- * This TAP provides statistics for RTP streams
+ * This TAP save RTP streams to pcap and to payload files
  */
 
 #include "config.h"
