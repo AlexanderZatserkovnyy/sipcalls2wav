@@ -308,7 +308,7 @@ rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void cons
     //
     //// save the packet payload to a file
     //make payload filename 
-    gchar* filename = g_strdup_printf("/data/pcaps1/%s_%d_%d.%d",call_id,ssrc,setup_frame_num,payload_type);
+    gchar* filename = g_strdup_printf("/data/pcaps1/%s_%d.%d",call_id,ssrc,payload_type);
     FILE* payload_file = (FILE *) g_hash_table_lookup(tapinfo->payload_files,filename);
     if(!payload_file){
         payload_file = fopen(filename, "wb");
