@@ -48,7 +48,6 @@ static sip_calls_t sip_calls;
 
 void register_tap_listener_rtp_save(void);
 
-
 static int hfid_sip_cseq_method = -1;    //"sip.CSeq.method"
 static int hfid_sip_to_tag = -1;         //"sip.to.tag"
 
@@ -100,9 +99,32 @@ payload_rm_vals(gpointer key, gpointer value, gpointer data) {
     }else return FALSE;
 }
 
-//fflush(payload_file);
-//fclose(payload_file);
+void dump_packet(wtap_dumper* d, packet_info *p ) {
+  int err=0;
+  gchar *err_info;
+  struct wtap_pkthdr pkthdr;
+  struct data_source *data_src;
+  const guchar* data;
+  tvbuff_t* tvb;
 
+  data_src = (struct data_source*) p->data_src->data;
+  tvb = get_data_source_tvb(data_src);
+  memset(&pkthdr, 0, sizeof(pkthdr));
+  pkthdr.rec_type = REC_TYPE_PACKET;
+  pkthdr.presence_flags = WTAP_HAS_TS|WTAP_HAS_CAP_LEN;
+  pkthdr.ts        = p->abs_ts;
+  pkthdr.len       = tvb_reported_length(tvb);
+  pkthdr.caplen    = tvb_captured_length(tvb);
+  pkthdr.pkt_encap = p->pkt_encap;
+  pkthdr.pseudo_header = *p->pseudo_header;
+  data = (const guchar *)tvb_memdup(wmem_packet_scope(),tvb,0,pkthdr.caplen);
+  wtap_dump(d, &pkthdr, data, &err, &err_info);
+  if(err){
+      printf("%s\n",err_info);
+      g_free(err_info);
+      exit(1);
+  }
+}
 
 
 ////////////////////////////////// a packet /////////////////////////////////////////////////////////
@@ -163,29 +185,9 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
     }
     
     if(wd){
-      gchar *err_info;
-      struct wtap_pkthdr pkthdr;
-      struct data_source *data_src;
-      const guchar* data;
-      tvbuff_t* tvb;
-      data_src = (struct data_source*) pinfo->data_src->data;
-      tvb = get_data_source_tvb(data_src);
-      memset(&pkthdr, 0, sizeof(pkthdr));
-      pkthdr.rec_type = REC_TYPE_PACKET;
-      pkthdr.presence_flags = WTAP_HAS_TS|WTAP_HAS_CAP_LEN;
-      pkthdr.ts        = pinfo->abs_ts;
-      pkthdr.len       = tvb_reported_length(tvb);
-      pkthdr.caplen    = tvb_captured_length(tvb);
-      pkthdr.pkt_encap = pinfo->pkt_encap;
-      pkthdr.pseudo_header = *pinfo->pseudo_header;
-      data = (const guchar *)tvb_memdup(wmem_packet_scope(),tvb,0,pkthdr.caplen);
-      wtap_dump(wd, &pkthdr, data, &err, &err_info);
-      if(err){
-          printf("%s\n",err_info);
-	  g_free(err_info);
-          exit(1);
-      }
-      if(response_code!=0){
+     dump_packet(wd,pinfo);
+
+     if(response_code!=0){
         GPtrArray *gp;
         gp=proto_get_finfo_ptr_array(edt->tree, hfid_sip_cseq_method);
         if(gp && gp->len==1){
@@ -264,24 +266,7 @@ rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void cons
        return FALSE;
     }
     //// save the packet to pcap file
-    gchar *err_info;
-    int    err = 0;
-    struct wtap_pkthdr pkthdr;
-    struct data_source *data_src;
-    const  guchar* data;
-    tvbuff_t* tvb;
-    data_src = (struct data_source*) pinfo->data_src->data;
-    tvb = get_data_source_tvb(data_src);
-    memset(&pkthdr, 0, sizeof(pkthdr));
-    pkthdr.rec_type = REC_TYPE_PACKET;
-    pkthdr.presence_flags = WTAP_HAS_TS|WTAP_HAS_CAP_LEN;
-    pkthdr.ts        = pinfo->abs_ts;
-    pkthdr.len       = tvb_reported_length(tvb);
-    pkthdr.caplen    = tvb_captured_length(tvb);
-    pkthdr.pkt_encap = pinfo->pkt_encap;
-    pkthdr.pseudo_header = *pinfo->pseudo_header;
-    data = (const guchar *)tvb_memdup(wmem_packet_scope(),tvb,0,pkthdr.caplen);
-    wtap_dump(wd, &pkthdr, data, &err, &err_info);
+    dump_packet(wd,pinfo);
     //
     //// save the packet payload to a file
     //make payload filename 
@@ -308,15 +293,6 @@ rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void cons
     guint32 payload_lastbytes=0;
     memcpy(&payload_firstbytes,payload_data,sizeof(payload_firstbytes));
     memcpy(&payload_lastbytes,payload_data+(payload_len-sizeof(payload_firstbytes)),sizeof(payload_firstbytes));
-
-    /*
-    printf("RTP frame: %u; ",frame_number);
-    printf("payload type: %u; ",payload_type);
-    printf("setup_frame: %u; ",setup_frame_num);
-    printf("seq_num: %u; ",seq_num);
-    printf("firstbytes: %X; ",payload_firstbytes);
-    printf("lastbytes: %X; ",payload_lastbytes);
-    printf("ssrc: %X\n",ssrc);*/
 
     return FALSE;
 }
