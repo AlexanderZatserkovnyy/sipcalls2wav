@@ -108,9 +108,18 @@ function tap.packet(pinfo,tvb,ip)
         local p_ts = os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts)
 	res = assert(con:execute(string.format("INSERT INTO cdr (calldate, clid, src, dst, disposition, userfield)  VALUES ('%s','%s', '%s', '%s', 'INVITE','%s');", 
 	             p_ts, tostring(sip_callid), tostring(sip_from_addr), tostring(sip_to_addr), tostring(sdp_connection_info_address).." ; "..tostring(sdp_media) ) ))
-
+        local sip_from=tostring(sip_from_addr)
+	local pos = sip_from:find(";")
+	if pos then
+	  sip_from=sip_from:sub(0,pos-1)
+	end
+	local sip_to=tostring(sip_to_addr)
+	local pos = sip_to:find(";")
+	if pos then
+	  sip_to=sip_to:sub(0,pos-1)
+	end
 	res = assert(con:execute(string.format("SELECT id FROM requests WHERE (( abonent_id='%s' OR  abonent_id='%s' ) AND ('%s' >= int_begin AND '%s'<= int_end ));", 
-	                         tostring(sip_from_addr), tostring(sip_to_addr), p_ts, p_ts ) ))
+	                         sip_from, sip_to, p_ts, p_ts ) ))
         ---- for testing write all calls, really set it tru or false via SELECT id FROM requests
         ---- get dumper and create files[sip_callid_v] only if SELECT id FROM requests return a record 
 	if res:numrows()>0 then 
