@@ -138,7 +138,7 @@ function tap.packet(pinfo,tvb,ip)
       if ((tostring(sip_cseq_method) == "BYE" and tostring(sip_status_code) == "200") or
           (tostring(sip_cseq_method) == "CANCEL" and tostring(sip_status_code) == "200") or 
           (tostring(sip_cseq_method) == "INVITE" and tostring(sip_status_code) == "487") ) then
-
+         local p_ts = os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts) 
 	 f_handle:flush()
          f_handle:close()
 	 f_handle = nil
@@ -148,12 +148,11 @@ function tap.packet(pinfo,tvb,ip)
 	      for l,rtp_f in pairs(v) do
 	         rtp_f:flush()
 	         rtp_f:close()
-		 local my_filename = outputdir .. "/" .. tostring(sip_callid_v) .."_"..tostring(k).."."..tostring(l)
-	         os.execute("./G711orG729-2wav "..my_filename.." "..tostring(l))
+		 local my_filename = tostring(sip_callid_v) .."_"..tostring(k).."."..tostring(l)
+	         os.execute("./G711orG729-2wav "..outputdir.."/"..my_filename.." "..tostring(l))
                  --os.execute("rm ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(l).." "..tostring(l))
 	         rtp_f=nil
-                 res = assert(con:execute(string.format("UPDATE files SET f_closed='%s' WHERE filename='%s';",
-                                                        os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts),my_filename) ))
+                 res = assert(con:execute(string.format("UPDATE files SET f_closed='%s' WHERE filename='%s';",p_ts,my_filename) ))
 
 	      end
 	      v=nil 
@@ -168,7 +167,7 @@ function tap.packet(pinfo,tvb,ip)
          -- SQL UPDATE 
 	 --
          res = assert(con:execute(string.format("UPDATE cdr SET disposition='CLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )),pcap='TRUE' WHERE clid='%s';",
-                                                 os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts),tostring(sip_callid_v))
+                                                 p_ts,tostring(sip_callid_v))
                                   ))
 
       end
@@ -231,8 +230,11 @@ function tap.draw()
         for m,rtp_f in pairs(vv) do
            rtp_f:flush()
            rtp_f:close()
-	   os.execute("./G711orG729-2wav ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(m).." "..tostring(m))
-           --os.execute("rm ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(rtp_f[2]).." "..tostring(rtp_f[2]))
+           local my_filename = tostring(k) .."_"..tostring(l).."."..tostring(m) 
+	   os.execute("./G711orG729-2wav ".. outputdir .. "/" .. my_filename .." "..tostring(m))
+           --os.execute("rm ".. outputdir .. "/" .. my_filename)
+           res = assert(con:execute(string.format("UPDATE files SET f_closed='%s' WHERE filename='%s';",
+                                                   last_packet_ts,my_filename) ))
            rtp_f=nil
 	end
 	vv=nil
@@ -271,8 +273,11 @@ function tap.reset()
         for m,rtp_f in pairs(vv) do
            rtp_f:flush()
            rtp_f:close()
-	   os.execute("./G711orG729-2wav ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(m).." "..tostring(m))
-           --os.execute("rm ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(rtp_f[2]).." "..tostring(rtp_f[2]))
+	   local my_filename = tostring(k) .."_"..tostring(l).."."..tostring(m) 
+	   os.execute("./G711orG729-2wav ".. outputdir .. "/" .. my_filename .." "..tostring(m))
+           --os.execute("rm ".. outputdir .. "/" .. my_filename)
+           res = assert(con:execute(string.format("UPDATE files SET f_closed='%s' WHERE filename='%s';",
+                                                        os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts),my_filename) ))
            rtp_f=nil
 	end
 	vv=nil
