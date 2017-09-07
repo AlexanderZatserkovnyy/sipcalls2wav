@@ -21,12 +21,14 @@ local sdp_frames = {}
 -- declare the Lua table of rtp data files
 local rtp_files = {}
 
+local last_packet_ts=""
+
 -- prepare the field extractors for the individual protocol types which we are tapping
 local frame_number_f = Field.new("frame.number")
 
 local rtp_setup_frame_f = Field.new("rtp.setup-frame")
 
-local t38_setup_frame_f = Field.new("t38.setup-frame")
+--local t38_setup_frame_f = Field.new("t38.setup-frame")
 
 local sip_callid_f = Field.new("sip.Call-ID")
 local sip_method_f = Field.new("sip.Method")
@@ -91,21 +93,33 @@ function tap.packet(pinfo,tvb,ip)
   local rtp_payload = rtp_payload_f()
   local rtp_seq = rtp_seq_f() 
 --
-  local t38_setup_frame = t38_setup_frame_f()
+-- local t38_setup_frame = t38_setup_frame_f()
 
+  last_packet_ts=os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts)
 -- handle SIP packets
   if sip_callid then
     sip_callid_v = sip_callid.value
-
+    --
 -- check whether the PDU is an initial INVITE, and create a call if it is and if that call doesn't exist yet
 -- because there was an unauthorized initial INVITE before
     sip_method = sip_method_f()
     if sip_method then
       if (sip_method.value == "INVITE" and not(sip_to_tag_f()) and not(files[sip_callid_v])) then
-        local f_handle = Dumper.new_for_current( outputdir .. "/" .. tostring(sip_callid) ..".pcap" )
+        local p_ts = os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts)
+	res = assert(con:execute(string.format("INSERT INTO cdr (calldate, clid, src, dst, disposition, userfield)  VALUES ('%s','%s', '%s', '%s', 'INVITE','%s');", 
+	             p_ts, tostring(sip_callid), tostring(sip_from_addr), tostring(sip_to_addr), tostring(sdp_connection_info_address).." ; "..tostring(sdp_media) ) ))
+
+	res = assert(con:execute(string.format("SELECT id FROM requests WHERE (( abonent_id='%s' OR  abonent_id='%s' ) AND ('%s' >= int_begin AND '%s'<= int_end ));", 
+	                         tostring(sip_from_addr), tostring(sip_to_addr), p_ts, p_ts ) ))
+        ---- for testing write all calls, really set it tru or false via SELECT id FROM requests
+        ---- get dumper and create files[sip_callid_v] only if SELECT id FROM requests return a record 
+	if res:numrows()>0 then 
+	    print("The call in requests. call_id:"..tostring(sip_callid).." src:"..tostring(sip_from_addr).." dst:"..tostring(sip_to_addr).."start:"..p_ts)
+	end
+	--
+	local f_handle = Dumper.new_for_current( outputdir .. "/" .. tostring(sip_callid) ..".pcap" )
         files[sip_callid_v] = f_handle
-	res = assert (con:execute(string.format("INSERT INTO cdr (clid, src, dst, userfield)  VALUES ('%s', '%s', '%s', '%s');", 
-	              tostring(sip_callid), tostring(sip_from_addr), tostring(sip_to_addr), tostring(sdp_connection_info_address).." ; "..tostring(sdp_media) ) ))
+        --end 
       end
     end
 
@@ -124,6 +138,7 @@ function tap.packet(pinfo,tvb,ip)
       if ((tostring(sip_cseq_method) == "BYE" and tostring(sip_status_code) == "200") or
           (tostring(sip_cseq_method) == "CANCEL" and tostring(sip_status_code) == "200") or 
           (tostring(sip_cseq_method) == "INVITE" and tostring(sip_status_code) == "487") ) then
+
 	 f_handle:flush()
          f_handle:close()
 	 f_handle = nil
@@ -133,9 +148,13 @@ function tap.packet(pinfo,tvb,ip)
 	      for l,rtp_f in pairs(v) do
 	         rtp_f:flush()
 	         rtp_f:close()
-	         os.execute("./G711orG729-2wav ".. outputdir .. "/" .. tostring(sip_callid_v) .."_"..tostring(k).."."..tostring(l).." "..tostring(l))
+		 local my_filename = outputdir .. "/" .. tostring(sip_callid_v) .."_"..tostring(k).."."..tostring(l)
+	         os.execute("./G711orG729-2wav "..my_filename.." "..tostring(l))
                  --os.execute("rm ".. outputdir .. "/" .. tostring(k) .."_"..tostring(l).."."..tostring(l).." "..tostring(l))
 	         rtp_f=nil
+                 res = assert(con:execute(string.format("UPDATE files SET f_closed='%s' WHERE filename='%s';",
+                                                        os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts),my_filename) ))
+
 	      end
 	      v=nil 
 	   end
@@ -146,6 +165,12 @@ function tap.packet(pinfo,tvb,ip)
 	     sdp_frames[k]=nil
 	   end
 	 end
+         -- SQL UPDATE 
+	 --
+         res = assert(con:execute(string.format("UPDATE cdr SET disposition='CLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )),pcap='TRUE' WHERE clid='%s';",
+                                                 os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts),tostring(sip_callid_v))
+                                  ))
+
       end
     end
   end
@@ -154,8 +179,8 @@ function tap.packet(pinfo,tvb,ip)
   if rtp_setup_frame then
     handle_media(rtp_setup_frame.value)
     if sdp_frames[rtp_setup_frame.value] then
-      if rtp_ssrc and rtp_p_type then
-        local first_key = sdp_frames[rtp_setup_frame.value]
+      local first_key = sdp_frames[rtp_setup_frame.value]  -- first_key  = call_id
+      if files[first_key] and rtp_ssrc and rtp_p_type then
 	if not(rtp_files[first_key]) then
 	   rtp_files[first_key]={}
 	end
@@ -167,7 +192,10 @@ function tap.packet(pinfo,tvb,ip)
            local my_rtp_name = tostring(first_key).."_"..tostring(rtp_ssrc.value).."."..tostring(rtp_p_type.value)
 	   rtp_file_handle = assert(io.open(outputdir .. "/" ..my_rtp_name, "wb"))
 	   rtp_files[first_key][rtp_ssrc.value][rtp_p_type.value]=rtp_file_handle
-	   print( my_rtp_name )
+           local p_ts = os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts)
+           res = assert(con:execute(string.format("INSERT INTO files (clid, ssrc, codec, f_opened, filename)  VALUES ('%s','%s', '%s', '%s', '%s');",
+                        tostring(first_key), tostring(rtp_ssrc.value), tostring(rtp_p_type.value), p_ts, tostring(my_rtp_name) ) ))
+
 	else
 	   rtp_file_handle = rtp_files[first_key][rtp_ssrc.value][rtp_p_type.value]
 	end
@@ -178,9 +206,9 @@ function tap.packet(pinfo,tvb,ip)
     end
   end
 
-  if t38_setup_frame then
-    handle_media(t38_setup_frame.value)
-  end
+  --if t38_setup_frame then
+  --  handle_media(t38_setup_frame.value)
+  --end
 
 end
 
@@ -191,6 +219,12 @@ function tap.draw()
      f_handle:close()
      f_handle=nil
      files[call_id]=nil
+     -- SQL UPDATE 
+     if(last_packet_ts~="") then
+           res = assert(con:execute(string.format("UPDATE cdr SET disposition='UNCLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )),pcap='TRUE' WHERE clid='%s';",
+	                                           last_packet_ts, tostring(call_id))
+			            ))
+     end
   end
   for k,v in pairs(rtp_files) do
      for l,vv in pairs(v) do
@@ -225,6 +259,12 @@ function tap.reset()
      f_handle:close()
      f_handle=nil
      files[call_id]=nil
+     -- SQL UPDATE 
+     if(last_packet_ts~="") then
+           res = assert(con:execute(string.format("UPDATE cdr SET disposition='UNCLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )) WHERE clid='%s';",
+	                                           last_packet_ts, tostring(call_id))
+			            ))
+     end
   end
   for k,v in pairs(rtp_files) do
      for l,vv in pairs(v) do
