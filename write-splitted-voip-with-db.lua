@@ -12,6 +12,7 @@ con = assert (env:connect("voiplog","dbworker","vFcnbh_+"))
 -- 
 local outputdir = "/data/pcaps"
 
+local calls = {}
 -- declare the Lua table for file handles
 local files = {}
 
@@ -21,7 +22,10 @@ local sdp_frames = {}
 -- declare the Lua table of rtp data files
 local rtp_files = {}
 
-local last_packet_ts=""
+-- write files for calls listed in requests table 
+-- default - write all calls
+local requested_calls_only=false
+
 
 -- prepare the field extractors for the individual protocol types which we are tapping
 local frame_number_f = Field.new("frame.number")
@@ -95,19 +99,22 @@ function tap.packet(pinfo,tvb,ip)
 --
 -- local t38_setup_frame = t38_setup_frame_f()
 
-  last_packet_ts=os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts)
 -- handle SIP packets
   if sip_callid then
     sip_callid_v = sip_callid.value
+
+    -- renew timestamp of last packet of the call
+    if calls[sip_callid_v] then
+        calls[sip_callid_v]=pinfo.abs_ts
+    end
     --
 -- check whether the PDU is an initial INVITE, and create a call if it is and if that call doesn't exist yet
 -- because there was an unauthorized initial INVITE before
     sip_method = sip_method_f()
     if sip_method then
       if (sip_method.value == "INVITE" and not(sip_to_tag_f()) and not(files[sip_callid_v])) then
+        calls[sip_callid_v]=pinfo.abs_ts
         local p_ts = os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts)
-	res = assert(con:execute(string.format("INSERT INTO cdr (calldate, clid, src, dst, disposition, userfield)  VALUES ('%s','%s', '%s', '%s', 'INVITE','%s');", 
-	             p_ts, tostring(sip_callid), tostring(sip_from_addr), tostring(sip_to_addr), tostring(sdp_connection_info_address).." ; "..tostring(sdp_media) ) ))
         local sip_from=tostring(sip_from_addr)
 	local pos = sip_from:find(";")
 	if pos then
@@ -118,17 +125,20 @@ function tap.packet(pinfo,tvb,ip)
 	if pos then
 	  sip_to=sip_to:sub(0,pos-1)
 	end
-	res = assert(con:execute(string.format("SELECT id FROM requests WHERE (( abonent_id='%s' OR  abonent_id='%s' ) AND ('%s' >= int_begin AND '%s'<= int_end ));", 
+	local res=nil
+	local write_pcap = 'FALSE'
+	if requested_calls_only then
+	  res = assert(con:execute(string.format("SELECT id FROM requests WHERE (( abonent_id='%s' OR  abonent_id='%s' ) AND ('%s' >= int_begin AND '%s'<= int_end ));", 
 	                         sip_from, sip_to, p_ts, p_ts ) ))
-        ---- for testing write all calls, really set it tru or false via SELECT id FROM requests
-        ---- get dumper and create files[sip_callid_v] only if SELECT id FROM requests return a record 
-	if res:numrows()>0 then 
-	    print("The call in requests. call_id:"..tostring(sip_callid).." src:"..tostring(sip_from_addr).." dst:"..tostring(sip_to_addr).."start:"..p_ts)
 	end
-	--
-	local f_handle = Dumper.new_for_current( outputdir .. "/" .. tostring(sip_callid) ..".pcap" )
-        files[sip_callid_v] = f_handle
-        --end 
+	if ( not requested_calls_only or (res and res:numrows()>0) ) then 
+	    local f_handle = Dumper.new_for_current( outputdir .. "/" .. tostring(sip_callid) ..".pcap" )
+            files[sip_callid_v] = f_handle
+	    write_pcap = 'TRUE'
+        end
+	res = assert(con:execute(string.format("INSERT INTO cdr (calldate, clid, src, dst, disposition, userfield,pcap)  VALUES ('%s','%s', '%s', '%s', 'INVITE','%s','%s');", 
+	             p_ts, tostring(sip_callid), tostring(sip_from_addr), tostring(sip_to_addr), tostring(sdp_connection_info_address).." ; "..tostring(sdp_media), write_pcap ) ))
+
       end
     end
 
@@ -141,13 +151,24 @@ function tap.packet(pinfo,tvb,ip)
     end
 
 -- finally, if the frame belongs to an existing call, copy it to the output file
+--  
+    local call_opened = calls[sip_callid_v]
+    local p_ts
+    if call_opened then
+        p_ts = os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts)
+        if ((tostring(sip_cseq_method) == "BYE" and tostring(sip_status_code) == "200") or
+            (tostring(sip_cseq_method) == "CANCEL" and tostring(sip_status_code) == "200") or 
+            (tostring(sip_cseq_method) == "INVITE" and tostring(sip_status_code) == "487") ) then
+	      calls[sip_callid_v]=nil -- close the record about the call 
+              res = assert(con:execute(string.format("UPDATE cdr SET disposition='CLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )) WHERE clid='%s';",
+                                                     p_ts,tostring(sip_callid_v)) ))
+        end
+    end
+
     local f_handle = files[sip_callid_v]
     if f_handle then
       f_handle:dump_current()
-      if ((tostring(sip_cseq_method) == "BYE" and tostring(sip_status_code) == "200") or
-          (tostring(sip_cseq_method) == "CANCEL" and tostring(sip_status_code) == "200") or 
-          (tostring(sip_cseq_method) == "INVITE" and tostring(sip_status_code) == "487") ) then
-         local p_ts = os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts) 
+      if ( not( calls[sip_callid_v] ) ) then -- close files for the call
 	 f_handle:flush()
          f_handle:close()
 	 f_handle = nil
@@ -173,12 +194,6 @@ function tap.packet(pinfo,tvb,ip)
 	     sdp_frames[k]=nil
 	   end
 	 end
-         -- SQL UPDATE 
-	 --
-         res = assert(con:execute(string.format("UPDATE cdr SET disposition='CLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )),pcap='TRUE' WHERE clid='%s';",
-                                                 p_ts,tostring(sip_callid_v))
-                                  ))
-
       end
     end
   end
@@ -187,25 +202,31 @@ function tap.packet(pinfo,tvb,ip)
   if rtp_setup_frame then
     handle_media(rtp_setup_frame.value)
     if sdp_frames[rtp_setup_frame.value] then
-      local first_key = sdp_frames[rtp_setup_frame.value]  -- first_key  = call_id
-      if files[first_key] and rtp_ssrc and rtp_p_type then
-	if not(rtp_files[first_key]) then
-	   rtp_files[first_key]={}
+      local call_id = sdp_frames[rtp_setup_frame.value]
+
+      -- renew timestamp of last packet of the call
+      if calls[call_id] then
+        calls[call_id]=pinfo.abs_ts 
+      end
+
+      if files[call_id] and rtp_ssrc and rtp_p_type then
+	if not(rtp_files[call_id]) then
+	   rtp_files[call_id]={}
 	end
-	if not(rtp_files[first_key][rtp_ssrc.value]) then
-	   rtp_files[first_key][rtp_ssrc.value]={}
+	if not(rtp_files[call_id][rtp_ssrc.value]) then
+	   rtp_files[call_id][rtp_ssrc.value]={}
 	end
 	local rtp_file_handle
-	if not(rtp_files[first_key][rtp_ssrc.value][rtp_p_type.value]) then
-           local my_rtp_name = tostring(first_key).."_"..tostring(rtp_ssrc.value).."."..tostring(rtp_p_type.value)
+	if not(rtp_files[call_id][rtp_ssrc.value][rtp_p_type.value]) then
+           local my_rtp_name = tostring(call_id).."_"..tostring(rtp_ssrc.value).."."..tostring(rtp_p_type.value)
 	   rtp_file_handle = assert(io.open(outputdir .. "/" ..my_rtp_name, "wb"))
-	   rtp_files[first_key][rtp_ssrc.value][rtp_p_type.value]=rtp_file_handle
+	   rtp_files[call_id][rtp_ssrc.value][rtp_p_type.value]=rtp_file_handle
            local p_ts = os.date("%Y-%m-%d %H:%M:%S", pinfo.abs_ts)
            res = assert(con:execute(string.format("INSERT INTO files (clid, ssrc, codec, f_opened, filename)  VALUES ('%s','%s', '%s', '%s', '%s');",
-                        tostring(first_key), tostring(rtp_ssrc.value), tostring(rtp_p_type.value), p_ts, tostring(my_rtp_name) ) ))
+                        tostring(call_id), tostring(rtp_ssrc.value), tostring(rtp_p_type.value), p_ts, tostring(my_rtp_name) ) ))
 
 	else
-	   rtp_file_handle = rtp_files[first_key][rtp_ssrc.value][rtp_p_type.value]
+	   rtp_file_handle = rtp_files[call_id][rtp_ssrc.value][rtp_p_type.value]
 	end
         if (rtp_file_handle and rtp_payload) then
 	  rtp_file_handle:write(rtp_payload.value:raw())
@@ -227,14 +248,12 @@ function tap.draw()
      f_handle:close()
      f_handle=nil
      files[call_id]=nil
-     -- SQL UPDATE 
-     if(last_packet_ts~="") then
-           res = assert(con:execute(string.format("UPDATE cdr SET disposition='UNCLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )),pcap='TRUE' WHERE clid='%s';",
-	                                           last_packet_ts, tostring(call_id))
-			            ))
-     end
   end
   for k,v in pairs(rtp_files) do
+     local last_packet_ts
+     if(calls[k]) then
+        last_packet_ts=os.date("%Y-%m-%d %H:%M:%S", calls[k])
+     end
      for l,vv in pairs(v) do
         for m,rtp_f in pairs(vv) do
            rtp_f:flush()
@@ -255,6 +274,13 @@ function tap.draw()
        sdp_frames[k]=nil
      end
   end
+  for call_id, ts in pairs(calls) do
+        local last_packet_ts =  os.date("%Y-%m-%d %H:%M:%S", ts) 
+        res = assert(con:execute(string.format("UPDATE cdr SET disposition='UNCLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )) WHERE clid='%s';",
+	                                           last_packet_ts, tostring(call_id)) ))
+	calls[call_id]=nil
+  end
+
 
   -- Close the database connection
   con:close()
@@ -270,14 +296,12 @@ function tap.reset()
      f_handle:close()
      f_handle=nil
      files[call_id]=nil
-     -- SQL UPDATE 
-     if(last_packet_ts~="") then
-           res = assert(con:execute(string.format("UPDATE cdr SET disposition='UNCLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )) WHERE clid='%s';",
-	                                           last_packet_ts, tostring(call_id))
-			            ))
-     end
   end
   for k,v in pairs(rtp_files) do
+     local last_packet_ts
+     if(calls[k]) then
+        last_packet_ts=os.date("%Y-%m-%d %H:%M:%S", calls[k])
+     end
      for l,vv in pairs(v) do
         for m,rtp_f in pairs(vv) do
            rtp_f:flush()
@@ -293,11 +317,13 @@ function tap.reset()
      end
      rtp_files[k]=nil
   end
-
-  --for call_id,ty in pairs(my_rtp_types) do
-  --     os.execute("mv ".. outputdir .. "/" .. tostring(call_id) ..".pcap "..outputdir .. "/" .. tostring(call_id).."_"..tostring(ty)..".pcap ")
-  --     my_rtp_types[call_id]=nil
-  --end
+  for call_id, ts in pairs(calls) do
+        local last_packet_ts =  os.date("%Y-%m-%d %H:%M:%S", ts) 
+        res = assert(con:execute(string.format("UPDATE cdr SET disposition='UNCLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )) WHERE clid='%s';",
+	                                           last_packet_ts, tostring(call_id)) ))
+	calls[call_id]=nil
+  end
+  --
   -- Close the database connection
   con:close()
   env:close()

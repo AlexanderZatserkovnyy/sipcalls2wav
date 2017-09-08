@@ -34,6 +34,7 @@
 #include "epan/dissectors/packet-rtp.h"
 #include "epan/dissectors/packet-rtp-events.h"
 #include "epan/dissectors/packet-t38.h"
+#include <libpq-fe.h>
 
 typedef struct _sip_calls_t {
 	GHashTable*  pcap_files;    // key - call id, value - file handler
@@ -42,6 +43,7 @@ typedef struct _sip_calls_t {
         guint32	     frame_num;
         gchar*       call_id;
 	gboolean     is_registered;
+        PGconn*      conn;
 } sip_calls_t;
 
 static sip_calls_t sip_calls;
@@ -124,6 +126,12 @@ void dump_packet(wtap_dumper* d, packet_info *p ) {
       g_free(err_info);
       exit(1);
   }
+}
+
+void psqlerror(char *mess)
+{
+  fprintf(stderr, "%s\n", mess);
+  exit(1);
 }
 
 
@@ -307,6 +315,7 @@ rtpsave_draw(void *arg _U_)
     g_hash_table_foreach( calls->pcap_files, (GHFunc)sip_reset_hash_pcap_files, NULL);
     g_hash_table_foreach( calls->sdp_frames, (GHFunc)sip_reset_hash_sdp_frames, NULL);
     g_hash_table_foreach( calls->payload_files, (GHFunc)sip_reset_hash_payload_files, NULL);
+    if (PQstatus(calls->conn) == CONNECTION_OK) PQfinish(conn);
     return; 
 }
 
@@ -324,6 +333,7 @@ rtpsave_reset(void *arg _U_)
     g_hash_table_foreach( calls->pcap_files, (GHFunc)sip_reset_hash_pcap_files, NULL);
     g_hash_table_foreach( calls->sdp_frames, (GHFunc)sip_reset_hash_sdp_frames, NULL);
     g_hash_table_foreach( calls->payload_files, (GHFunc)sip_reset_hash_payload_files, NULL);
+    if (PQstatus(calls->conn) == CONNECTION_OK) PQfinish(conn);
     return;
 }
 
@@ -369,6 +379,9 @@ rtp_save_init(const char *opt_arg _U_, void *userdata _U_)
     sip_calls.pcap_files=g_hash_table_new(g_str_hash, g_str_equal);
     sip_calls.sdp_frames=g_hash_table_new(g_int_hash, g_int_equal);
     sip_calls.payload_files=g_hash_table_new(g_str_hash, g_str_equal);
+     
+    sip_calls.conn = PQconnectdb("host=localhost dbname=voiplog user=dbworker password='vFcnbh_+'");
+    if (PQstatus(sip_calls.conn) != CONNECTION_OK) psqlerror(PQerrorMessage(conn));
 }
 
 static stat_tap_ui rtp_save_stat_ui = {
