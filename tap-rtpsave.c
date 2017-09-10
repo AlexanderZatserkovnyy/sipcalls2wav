@@ -36,6 +36,9 @@
 #include "epan/dissectors/packet-t38.h"
 #include <libpq-fe.h>
 
+#define PATH_TO_STORAGE "/data/pcaps1/"
+#define REQUESTED_CALLS_ONLY  0
+
 typedef struct _sip_calls_t {
 	GHashTable*  pcap_files;    // key - call id, value - file handler
         GHashTable*  sdp_frames;    // key - frame number, value - call id
@@ -177,7 +180,7 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
        int filetype = WTAP_FILE_TYPE_SUBTYPE_PCAP;
        int encap = WTAP_ENCAP_ETHERNET;
 
-       gchar* filename = g_strconcat("/data/pcaps1/",call_id,".pcap",NULL);
+       gchar* filename = g_strconcat(PATH_TO_STORAGE,call_id,".pcap",NULL);
        wd = wtap_dump_open(filename, filetype, encap, 0, FALSE, &err);
        if(err){
        	  printf("Error: %s\n",wtap_strerror(err));
@@ -277,24 +280,26 @@ rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void cons
     dump_packet(wd,pinfo);
     //
     //// save the packet payload to a file
-    //make payload filename 
-    gchar* filename = g_strdup_printf("/data/pcaps1/%s_%d.%d",call_id,ssrc,payload_type);
-    FILE* payload_file = (FILE *) g_hash_table_lookup(tapinfo->payload_files,filename);
-    if(!payload_file){
-        payload_file = fopen(filename, "wb");
-	if (payload_file == NULL){
+    //make payload filename
+
+    gchar* filename = g_strdup_printf("%s_%d.%d",call_id,ssrc,payload_type);
+    gchar* filepath = g_strconcat(PATH_TO_STORAGE "payload/",filename,NULL);
+    FILE* payload_fh = (FILE *) g_hash_table_lookup(tapinfo->payload_files,filename);
+    if(!payload_fh){
+        payload_fh = fopen(filepath, "wb");
+	if (payload_fh == NULL){
 	    printf("Error: %s\n",g_strerror(errno));
 	    exit(1);
 	}
-	g_hash_table_insert(tapinfo->payload_files,filename,payload_file);
+	g_hash_table_insert(tapinfo->payload_files,filename,payload_fh);
     }
-
+    g_free(filepath);
     const guint8* payload_data=rtpinfo->info_data + rtpinfo->info_payload_offset;
     guint32 payload_len=rtpinfo->info_payload_len-rtpinfo->info_padding_count;
 
-    if(payload_file && payload_len && rtpinfo->info_data && payload_data){
+    if(payload_fh && payload_len && rtpinfo->info_data && payload_data){
       size_t nchars;
-      nchars=fwrite(payload_data, sizeof(unsigned char), payload_len, payload_file);
+      nchars=fwrite(payload_data, sizeof(unsigned char), payload_len, payload_fh);
       if(nchars != payload_len) printf("Error: a write error %s \n",g_strerror(errno));
     }
     guint32 payload_firstbytes=0;
@@ -315,7 +320,7 @@ rtpsave_draw(void *arg _U_)
     g_hash_table_foreach( calls->pcap_files, (GHFunc)sip_reset_hash_pcap_files, NULL);
     g_hash_table_foreach( calls->sdp_frames, (GHFunc)sip_reset_hash_sdp_frames, NULL);
     g_hash_table_foreach( calls->payload_files, (GHFunc)sip_reset_hash_payload_files, NULL);
-    if (PQstatus(calls->conn) == CONNECTION_OK) PQfinish(conn);
+    if (PQstatus(calls->conn) == CONNECTION_OK) PQfinish(calls->conn);
     return; 
 }
 
@@ -333,7 +338,7 @@ rtpsave_reset(void *arg _U_)
     g_hash_table_foreach( calls->pcap_files, (GHFunc)sip_reset_hash_pcap_files, NULL);
     g_hash_table_foreach( calls->sdp_frames, (GHFunc)sip_reset_hash_sdp_frames, NULL);
     g_hash_table_foreach( calls->payload_files, (GHFunc)sip_reset_hash_payload_files, NULL);
-    if (PQstatus(calls->conn) == CONNECTION_OK) PQfinish(conn);
+    if (PQstatus(calls->conn) == CONNECTION_OK) PQfinish(calls->conn);
     return;
 }
 
@@ -381,7 +386,7 @@ rtp_save_init(const char *opt_arg _U_, void *userdata _U_)
     sip_calls.payload_files=g_hash_table_new(g_str_hash, g_str_equal);
      
     sip_calls.conn = PQconnectdb("host=localhost dbname=voiplog user=dbworker password='vFcnbh_+'");
-    if (PQstatus(sip_calls.conn) != CONNECTION_OK) psqlerror(PQerrorMessage(conn));
+    if (PQstatus(sip_calls.conn) != CONNECTION_OK) psqlerror(PQerrorMessage(sip_calls.conn));
 }
 
 static stat_tap_ui rtp_save_stat_ui = {

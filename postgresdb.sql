@@ -7,8 +7,8 @@ CREATE DATABASE voiplog OWNER dbworker ENCODING 'UTF-8';
 CREATE TABLE IF NOT EXISTS cdr (
   clid character varying(80) DEFAULT '' PRIMARY KEY,
   calldate timestamp with time zone DEFAULT now() NOT NULL,
-  src character varying(80) DEFAULT '' NOT NULL,
-  dst character varying(80) DEFAULT '' NOT NULL,
+  src character varying(255) DEFAULT '' NOT NULL,
+  dst character varying(255) DEFAULT '' NOT NULL,
   dcontext character varying(80) DEFAULT '' NOT NULL,
   channel character varying(80) DEFAULT '' NOT NULL,
   dstchannel character varying(80) DEFAULT '' NOT NULL,
