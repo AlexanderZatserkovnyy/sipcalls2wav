@@ -55,7 +55,7 @@ typedef struct _payload_file_t {
 typedef struct _sip_calls_t {
 	GHashTable*  calls;    // key - call id, value - file handler
         GHashTable*  sdp_frames;    // key - frame number, value - call id
-	GHashTable*  payload_files; // key - string (?) call_id + ssrc + payload_type + setupframe (?) 
+	GHashTable*  payload_files; // key - string , call_id + ssrc + payload_type  
         guint32	     frame_num;
         gchar*       call_id;
 	gboolean     is_registered;
