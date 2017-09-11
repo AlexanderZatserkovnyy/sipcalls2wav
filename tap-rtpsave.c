@@ -37,7 +37,7 @@
 #include <libpq-fe.h>
 
 #define PATH_TO_STORAGE "/data/pcaps1/"
-#define REQUESTED_CALLS_ONLY  1
+#define REQUESTED_CALLS_ONLY  0
 
 typedef struct _call_rec_t {
         nstime_t     pkt_ts;
