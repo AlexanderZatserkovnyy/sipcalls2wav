@@ -38,6 +38,7 @@
 
 #define PATH_TO_STORAGE "/data/pcaps1/"
 #define REQUESTED_CALLS_ONLY  0
+#define DB_COONNECTION "host=localhost dbname=voiplog user=dbworker password='MYPASSWORD'"
 
 typedef struct _call_rec_t {
         nstime_t     pkt_ts;
@@ -220,7 +221,7 @@ dump_packet(wtap_dumper* d, packet_info *p )
   data = (const guchar *)tvb_memdup(wmem_packet_scope(),tvb,0,pkthdr.caplen);
   wtap_dump(d, &pkthdr, data, &err, &err_info);
   if(err){
-      printf("%s\n",err_info);
+      fprintf(stderr,"%s\n",err_info);
       g_free(err_info);
       exit(1);
   }
@@ -297,7 +298,7 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
          gchar* filename = g_strconcat(PATH_TO_STORAGE,call_id,".pcap",NULL);
          call->wd = wtap_dump_open(filename, filetype, encap, 0, FALSE, &err);
          if(err){
-            printf("Error: %s\n",wtap_strerror(err));
+            fprintf(stderr,"%s\n",wtap_strerror(err));
 	    exit(1);
          }
          g_free(filename);
@@ -336,7 +337,7 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
 	  {
             wtap_dump_flush(call->wd);
             if(!wtap_dump_close(call->wd, &err)){
- 	       printf("Error: %s\n",g_strerror(err));
+ 	       fprintf(stderr,"%s\n",g_strerror(err));
 	    }
 
             PGresult* res;
@@ -405,13 +406,13 @@ rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void cons
 
     gchar* call_id  = (gchar*) g_hash_table_lookup(tapinfo->sdp_frames,&setup_frame_num);
     if(call_id==NULL){
-       printf("Can't find SDP/SIP data for the RTP frame:%d, SDP frame:%d\n",frame_number, setup_frame_num);
+       fprintf(stderr,"Can't find SDP/SIP data for the RTP frame:%d, SDP frame:%d\n",frame_number, setup_frame_num);
        return FALSE;
     } 
 
     call_rec_t* call = (call_rec_t*) g_hash_table_lookup(tapinfo->calls,call_id);
     if(!call){
-       printf("Can't find registered SIP call for the RTP frame:%d, SDP frame:%d\n",frame_number, setup_frame_num);
+       fprintf(stderr,"Can't find registered SIP call for the RTP frame:%d, SDP frame:%d\n",frame_number, setup_frame_num);
        return FALSE;
     }
 
@@ -546,7 +547,7 @@ rtp_save_init(const char *opt_arg _U_, void *userdata _U_)
     sip_calls.sdp_frames=g_hash_table_new_full(g_int_hash, g_int_equal, g_free, g_free);
     sip_calls.payload_files=g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
      
-    sip_calls.conn = PQconnectdb("host=localhost dbname=voiplog user=dbworker password='vFcnbh_+'");
+    sip_calls.conn = PQconnectdb(DB_COONNECTION);
     if (PQstatus(sip_calls.conn) != CONNECTION_OK) psqlerror(PQerrorMessage(sip_calls.conn));
 }
 
