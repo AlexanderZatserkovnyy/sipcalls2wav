@@ -38,7 +38,7 @@
 
 #define PATH_TO_STORAGE "/data/pcaps1/"
 #define REQUESTED_CALLS_ONLY  0
-#define DB_COONNECTION "host=localhost dbname=voiplog user=dbworker password='MYPASSWORD'"
+#define DB_COONNECTION "host=localhost dbname=voiplog user=dbworker password='vFcnbh_+'"
 
 typedef struct _call_rec_t {
         nstime_t     pkt_ts;
@@ -55,7 +55,7 @@ typedef struct _payload_file_t {
 typedef struct _sip_calls_t {
 	GHashTable*  calls;    // key - call id, value - file handler
         GHashTable*  sdp_frames;    // key - frame number, value - call id
-	GHashTable*  payload_files; // key - string , call_id + ssrc + payload_type  
+	GHashTable*  payload_files; // key - string (?) call_id + ssrc + payload_type + setupframe (?) 
         guint32	     frame_num;
         gchar*       call_id;
 	gboolean     is_registered;
@@ -406,7 +406,7 @@ rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void cons
 
     gchar* call_id  = (gchar*) g_hash_table_lookup(tapinfo->sdp_frames,&setup_frame_num);
     if(call_id==NULL){
-       fprintf(stderr,"Can't find SDP/SIP data for the RTP frame:%d, SDP frame:%d\n",frame_number, setup_frame_num);
+       /* fprintf(stderr,"Can't find SDP/SIP data for the RTP frame:%d, SDP frame:%d\n",frame_number, setup_frame_num); Not SIP call RTP data*/
        return FALSE;
     } 
 
@@ -423,7 +423,7 @@ rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void cons
     //
     //// save the packet payload to a file
     //make payload filename
-    gchar* filename = g_strdup_printf("%s_%d.%d",call_id,ssrc,payload_type); //don't free here, it's key for hash table
+    gchar* filename = g_strdup_printf("%s_%u.%u",call_id,ssrc,payload_type); //don't free here, it's key for hash table
     gchar* filepath = g_strconcat(PATH_TO_STORAGE "payload/",filename,NULL);
     payload_file_t* payload_f = (payload_file_t*) g_hash_table_lookup(tapinfo->payload_files,filename);
 

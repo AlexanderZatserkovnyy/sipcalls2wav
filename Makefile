@@ -1,15 +1,20 @@
 CC=g++
 CXXFLAGS += -g -Wall -O3 --std=c++11
 LDLIBS= -lbcg729  
-TARGET_SOURCES = G711orG729-2wav.cpp codecParameters.h typedef.h
-TARGET = G711orG729-2wav
+TARGET1_SOURCES = payload2wav.cpp codecParameters.h typedef.h
+TARGET2_SOURCES = inotify-payload2wav.cpp codecParameters.h typedef.h
+TARGET1 = payload2wav
+TARGET2 = inotify-payload2wav
 
-.PHONY: all 2wav
+.PHONY: all 1 2
 
-all: 2wav
+all: 1 2
+1: $(TARGET1)
+2: $(TARGET2)
 
-2wav: $(TARGET)
+$(TARGET1): $(TARGET1_SOURCES) 
+	$(CC) $(CXXFLAGS) $^ $(LDLIBS) -o $@
 
-$(TARGET): $(TARGET_SOURCES) 
-	$(CC) $(CXXFLAGS) G711orG729-2wav.cpp $(LDLIBS) -o $@
+$(TARGET2): $(TARGET2_SOURCES)
+	$(CC) $(CXXFLAGS) $^ $(LDLIBS) -o $@
 
