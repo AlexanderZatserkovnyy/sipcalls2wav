@@ -17,13 +17,13 @@ write-splitted-voip-with-db.lua depends on luasql and postgres table cdr .
 You may just comment driver.postgres, env:connect, con:execute and to function without Postgres.
 payload2wav depends on bcg729 lib.  
 
-You can use payload2wav independantly on a payload file (e.g. G711mu data):
+You can use payload2wav on a payload file (e.g. G711mu data):
 ```
 payload2wav /data/pcaps/12013223\@200.57.7.195_1492336106.8
 payload2wav /data/pcaps/12013223\@200.57.7.195_1492336106.8 /data/wavfiles/
 ```
-There is also inotify variant of the payload2wav here. It's converts payload files to wav  
-in a specified directory on an event IN_CLOSE_WRITE . It's just run independantly from a paload generator:
+There is also the INOTIFY variant of the payload2wav here. It converts payload files to WAV in a specified directory on an event IN_CLOSE_WRITE. 
+It's just run independently from a payload generator:
 ```
 inotify-payload2wav /data/pcaps1/payload /data/pcaps1/wav
 ```
