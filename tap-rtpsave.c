@@ -37,10 +37,7 @@
 #include "epan/dissectors/packet-t38.h"
 #include <libpq-fe.h>
 
-#define PATH_TO_STORAGE "/data/pcaps1/"
-#define REQUESTED_CALLS_ONLY  1
-#define DB_COONNECTION "host=localhost dbname=voiplog user=dbworker password='vFcnbh_+'"
-#define SUSPENDED_CALL_TIMEOUT 30.0
+#define PATH_TO_CONF "/data/conf/tap-rtpsave.conf" 
 
 typedef struct _call_rec_t {
         nstime_t     pkt_ts;
@@ -62,6 +59,9 @@ typedef struct _sip_calls_t {
 	gboolean     is_registered;
 	nstime_t     pkt_ts;
         PGconn*      conn;
+	gchar*       path_to_storage;
+	gboolean     requested_calls_only;
+	gdouble      call_timout;
 } sip_calls_t;
 
 static sip_calls_t sip_calls;
@@ -207,7 +207,7 @@ rm_calls_by_timeout(gpointer key, gpointer value, gpointer data)
    gchar*       call_id = (gchar *) key;
    call_rec_t*  call = (call_rec_t*) value;
    double       time_diff =fabs(nstime_to_sec(&(tapinfo->pkt_ts))-nstime_to_sec(&(call->pkt_ts)));
-   if( time_diff > SUSPENDED_CALL_TIMEOUT ){
+   if( time_diff > tapinfo->call_timout ){
      int err;
      if( call_id && call ){
        if(call->wd){ 
@@ -308,13 +308,13 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
        call->wd=NULL;
        nstime_copy(&(call->pkt_ts), &(pinfo->abs_ts));
 
-       int the_call_reqested = (REQUESTED_CALLS_ONLY) ? 0:1; 
+       int the_call_reqested = (tapinfo->requested_calls_only) ? 0:1; 
        /* SQL SELECT requests */ 
        PGresult* res;
        gchar* sqlrequest;
        gchar* ts_buf = my_abs_time_to_str(&pinfo->abs_ts); 
 
-       if(REQUESTED_CALLS_ONLY){
+       if(tapinfo->requested_calls_only){
           gchar *from = clear_sipaddr(from_addr);
 	  gchar *to = clear_sipaddr(to_addr);
 
@@ -332,7 +332,8 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
 
        gchar  write_pcap[]="FALSE";
        if(the_call_reqested){
-         gchar* filename = g_strconcat(PATH_TO_STORAGE,call_id,".pcap",NULL);
+         
+         gchar* filename = g_strconcat(tapinfo->path_to_storage,"/",call_id,".pcap",NULL);
          call->wd = wtap_dump_open(filename, filetype, encap, 0, FALSE, &err);
          if(err){
             fprintf(stderr,"%s\n",wtap_strerror(err));
@@ -465,7 +466,7 @@ rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void cons
     //// save the packet payload to a file
     //make payload filename
     gchar* filename = g_strdup_printf("%s_%u.%u",call_id,ssrc,payload_type); //don't free here, it's key for hash table
-    gchar* filepath = g_strconcat(PATH_TO_STORAGE "payload/",filename,NULL);
+    gchar* filepath = g_strconcat(tapinfo->path_to_storage,"/payload/",filename,NULL);
     payload_file_t* payload_f = (payload_file_t*) g_hash_table_lookup(tapinfo->payload_files,filename);
 
     if(!payload_f){
@@ -521,6 +522,7 @@ rtpsave_draw(void *arg _U_)
     g_hash_table_foreach( tapinfo->calls, (GHFunc)sip_reset_hash_calls, tapinfo->conn );
     g_hash_table_destroy( tapinfo->calls );
     if (PQstatus(tapinfo->conn) == CONNECTION_OK) PQfinish(tapinfo->conn);
+    g_free(tapinfo->path_to_storage);
     return; 
 }
 
@@ -542,6 +544,7 @@ rtpsave_reset(void *arg _U_)
     g_hash_table_foreach( tapinfo->calls, (GHFunc)sip_reset_hash_calls, NULL);
     g_hash_table_destroy( tapinfo->calls );
     if (PQstatus(tapinfo->conn) == CONNECTION_OK) PQfinish(tapinfo->conn);
+    g_free(tapinfo->path_to_storage);
     return;
 }
 
@@ -586,9 +589,39 @@ rtp_save_init(const char *opt_arg _U_, void *userdata _U_)
     sip_calls.calls=g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     sip_calls.sdp_frames=g_hash_table_new_full(g_int_hash, g_int_equal, g_free, g_free);
     sip_calls.payload_files=g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-     
-    sip_calls.conn = PQconnectdb(DB_COONNECTION);
+
+    GKeyFile *key_file;
+    GError *error;
+
+    gchar*   db_connection;
+    
+    key_file = g_key_file_new();
+    if(!g_key_file_load_from_file(key_file, PATH_TO_CONF, G_KEY_FILE_NONE, &error))
+        psqlerror(error->message);
+    
+    sip_calls.path_to_storage = g_key_file_get_string(key_file, "config", "PATH_TO_STORAGE", &error);
+    if(!sip_calls.path_to_storage) psqlerror(error->message);
+
+    db_connection   = g_key_file_get_string(key_file, "config", "DB_COONNECTION", &error);
+    if(!db_connection) psqlerror(error->message);
+    if(db_connection[0]=='"') db_connection[0]=' ';
+    if(db_connection[strlen(db_connection)-1]=='"') db_connection[strlen(db_connection)-1]=' ';
+    
+    sip_calls.requested_calls_only = g_key_file_get_boolean(key_file, "config", "REQUESTED_CALLS_ONLY", &error);
+    if(!(sip_calls.requested_calls_only) && error ) psqlerror(error->message);
+    
+    sip_calls.call_timout = g_key_file_get_double(key_file, "config", "CALL_TIMEOUT", &error);
+
+    g_key_file_free (key_file);
+
+    printf("path:%s\n",sip_calls.path_to_storage);
+    printf("db:%s\n",db_connection);
+    printf("requ:%d\n",sip_calls.requested_calls_only);
+    printf("tout:%f\n",sip_calls.call_timout);
+
+    sip_calls.conn = PQconnectdb(db_connection);
     if (PQstatus(sip_calls.conn) != CONNECTION_OK) psqlerror(PQerrorMessage(sip_calls.conn));
+    g_free(db_connection);
 }
 
 static stat_tap_ui rtp_save_stat_ui = {
