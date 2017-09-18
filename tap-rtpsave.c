@@ -14,6 +14,7 @@
 #include <string.h>
 #include <errno.h>
 #include <stdio.h>
+#include <math.h>
 
 #include <locale.h>
 #include <glib.h>
@@ -37,8 +38,9 @@
 #include <libpq-fe.h>
 
 #define PATH_TO_STORAGE "/data/pcaps1/"
-#define REQUESTED_CALLS_ONLY  0
+#define REQUESTED_CALLS_ONLY  1
 #define DB_COONNECTION "host=localhost dbname=voiplog user=dbworker password='vFcnbh_+'"
+#define SUSPENDED_CALL_TIMEOUT 30.0
 
 typedef struct _call_rec_t {
         nstime_t     pkt_ts;
@@ -51,7 +53,6 @@ typedef struct _payload_file_t {
         PGconn*   conn;
 } payload_file_t;
 
-
 typedef struct _sip_calls_t {
 	GHashTable*  calls;    // key - call id, value - file handler
         GHashTable*  sdp_frames;    // key - frame number, value - call id
@@ -59,6 +60,7 @@ typedef struct _sip_calls_t {
         guint32	     frame_num;
         gchar*       call_id;
 	gboolean     is_registered;
+	nstime_t     pkt_ts;
         PGconn*      conn;
 } sip_calls_t;
 
@@ -68,7 +70,6 @@ void register_tap_listener_rtp_save(void);
 
 static int hfid_sip_cseq_method = -1;    //"sip.CSeq.method"
 static int hfid_sip_to_tag = -1;         //"sip.to.tag"
-
 
 void psqlerror(char *mess)
 {
@@ -135,7 +136,7 @@ sip_reset_hash_calls(gchar *key _U_ , call_rec_t* call, PGconn* conn _U_ )
       PGresult* res;
       gchar* ts_buf = my_abs_time_to_str(&(call->pkt_ts));
       gchar* sqlrequest;
-      sqlrequest=g_strdup_printf("UPDATE cdr SET disposition='CLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )) WHERE clid='%s';",
+      sqlrequest=g_strdup_printf("UPDATE cdr SET disposition='UNCLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )) WHERE clid='%s';",
                                        ts_buf, key);
       res = PQexec(conn,sqlrequest);
       if (PQresultStatus(res) != PGRES_COMMAND_OK) psqlerror(PQresultErrorMessage(res));
@@ -195,7 +196,43 @@ payload_rm_vals(gpointer key, gpointer value, gpointer data)
 
       g_free(pf);
       return TRUE; 
-    }else return FALSE;
+    }else 
+      return FALSE;
+}
+
+gboolean
+rm_calls_by_timeout(gpointer key, gpointer value, gpointer data)
+{
+   sip_calls_t* tapinfo = (sip_calls_t *) data;
+   gchar*       call_id = (gchar *) key;
+   call_rec_t*  call = (call_rec_t*) value;
+   double       time_diff =fabs(nstime_to_sec(&(tapinfo->pkt_ts))-nstime_to_sec(&(call->pkt_ts)));
+   if( time_diff > SUSPENDED_CALL_TIMEOUT ){
+     int err;
+     if( call_id && call ){
+       if(call->wd){ 
+          wtap_dump_flush(call->wd);
+          if(!wtap_dump_close(call->wd, &err)) fprintf(stderr,"%s\n",g_strerror(err));
+          g_hash_table_foreach_remove(tapinfo->payload_files,(GHRFunc)payload_rm_vals,call_id);
+       }
+       g_hash_table_foreach_remove(tapinfo->sdp_frames,(GHRFunc)sdp_rm_vals,call_id);
+       if( tapinfo->conn ){
+          PGresult* res;
+          gchar* ts_buf = my_abs_time_to_str(&(call->pkt_ts));
+          gchar* sqlrequest;
+          sqlrequest=g_strdup_printf("UPDATE cdr SET disposition='UNCLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )) WHERE clid='%s';",
+                                       ts_buf, call_id);
+          res = PQexec(tapinfo->conn,sqlrequest);
+          if (PQresultStatus(res) != PGRES_COMMAND_OK) psqlerror(PQresultErrorMessage(res));
+          PQclear(res);
+          g_free(sqlrequest);
+          wmem_free(NULL,ts_buf);
+       }
+      g_free(call);
+     }   
+     return TRUE;    
+   }else 
+     return FALSE;
 }
 
 void 
@@ -321,8 +358,8 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
 
     }else if (call) nstime_copy(&(call->pkt_ts), &(pinfo->abs_ts));
     
-    if(call&&call->wd){
-     dump_packet(call->wd,pinfo);
+    if(call){
+     if(call->wd) dump_packet(call->wd,pinfo);
 
      if(response_code!=0){
         GPtrArray *gp;
@@ -335,11 +372,12 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
           if( (response_code==200 && ( strcmp(cseq_method,"BYE")==0 || strcmp(cseq_method,"CANCEL")==0 )) ||
 	      (response_code==487 && strcmp(cseq_method,"INVITE")==0) )
 	  {
-            wtap_dump_flush(call->wd);
-            if(!wtap_dump_close(call->wd, &err)){
- 	       fprintf(stderr,"%s\n",g_strerror(err));
-	    }
-
+	    if(call->wd){
+              wtap_dump_flush(call->wd);
+              if(!wtap_dump_close(call->wd, &err)){
+ 	         fprintf(stderr,"%s\n",g_strerror(err));
+	      }
+            }
             PGresult* res;
 	    gchar* sqlrequest;
 	    gchar* ts_buf = my_abs_time_to_str(&pinfo->abs_ts);
@@ -356,13 +394,16 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
 	    g_hash_table_foreach_remove(tapinfo->sdp_frames,(GHRFunc)sdp_rm_vals,call_id);
             g_hash_table_foreach_remove(tapinfo->payload_files,(GHRFunc)payload_rm_vals,call_id);
 
-
-           /* SQL UPDATE (the call state , 200 reply to BYE/CANSEL or 487 to INVITE) */
+            /* info for debug */
             printf("BYE/CANSEL SIP frame: %u; ",frame_number);
             printf("response code: %u - %s; ",response_code,reason_phrase);
             printf("cseq_number: %u; ",cseq_number);
             printf("cseq method: %s; ",cseq_method);
             printf("call_id: %s\n",call_id);
+
+	    /*clear suspended calls by  timeout*/
+	    nstime_copy(&(tapinfo->pkt_ts), &(pinfo->abs_ts));
+            g_hash_table_foreach_remove(tapinfo->calls,(GHRFunc)rm_calls_by_timeout,tapinfo);
 	  } 
         }
       }
@@ -517,7 +558,6 @@ rtp_save_init(const char *opt_arg _U_, void *userdata _U_)
     hfid_sip_cseq_method = proto_registrar_get_id_byname("sip.CSeq.method");
     hfid_sip_to_tag = proto_registrar_get_id_byname("sip.to.tag");
     sip_calls.frame_num=0;   
-    
 
     GString             *err_p1, *err_p2, *err_p3;
     
