@@ -62,6 +62,7 @@ typedef struct _sip_calls_t {
 	gchar*       path_to_storage;
 	gboolean     requested_calls_only;
 	gdouble      call_timout;
+	gboolean     debug;
 } sip_calls_t;
 
 static sip_calls_t sip_calls;
@@ -167,7 +168,7 @@ sip_reset_hash_payload_files(gchar *key _U_ , payload_file_t* pf, gpointer ptr _
 }
 
 gboolean 
-sdp_rm_vals(gpointer key, gpointer value, gpointer call_id) 
+sdp_rm_vals(gpointer key _U_, gpointer value, gpointer call_id) 
 {   
     if( g_strcmp0((gchar*) call_id,(gchar*) value)==0 ){
       return TRUE; 
@@ -352,11 +353,12 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
        PQclear(res);
        g_free(sqlrequest);
        wmem_free(NULL,ts_buf);
-       printf("INVITE SIP frame: %u; ",frame_number);
-       printf("request method: %s; ",request_method);
-       printf("cseq_number: %u; ",cseq_number);
-       printf("call_id: %s\n",call_id);
-
+       if(tapinfo->debug){
+         printf("INVITE SIP frame: %u; ",frame_number);
+         printf("request method: %s; ",request_method);
+         printf("cseq_number: %u; ",cseq_number);
+         printf("call_id: %s\n",call_id);
+       }
     }else if (call) nstime_copy(&(call->pkt_ts), &(pinfo->abs_ts));
     
     if(call){
@@ -396,12 +398,13 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
             g_hash_table_foreach_remove(tapinfo->payload_files,(GHRFunc)payload_rm_vals,call_id);
 
             /* info for debug */
-            printf("BYE/CANSEL SIP frame: %u; ",frame_number);
-            printf("response code: %u - %s; ",response_code,reason_phrase);
-            printf("cseq_number: %u; ",cseq_number);
-            printf("cseq method: %s; ",cseq_method);
-            printf("call_id: %s\n",call_id);
-
+	    if(tapinfo->debug){
+              printf("BYE/CANSEL SIP frame: %u; ",frame_number);
+              printf("response code: %u - %s; ",response_code,reason_phrase);
+              printf("cseq_number: %u; ",cseq_number);
+              printf("cseq method: %s; ",cseq_method);
+              printf("call_id: %s\n",call_id);
+            }
 	    /*clear suspended calls by  timeout*/
 	    nstime_copy(&(tapinfo->pkt_ts), &(pinfo->abs_ts));
             g_hash_table_foreach_remove(tapinfo->calls,(GHRFunc)rm_calls_by_timeout,tapinfo);
@@ -419,7 +422,7 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
 }
 
 static gboolean
-rtpsave_sdp_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void const *sdp_info_ptr)
+rtpsave_sdp_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt _U_, void const *sdp_info_ptr _U_)
 {  
     sip_calls_t *tapinfo = (sip_calls_t *)arg;
     guint32 frame_number= pinfo->num;
@@ -435,7 +438,7 @@ rtpsave_sdp_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
 }
 
 static gboolean
-rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void const *rtp_info_ptr)
+rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt _U_, void const *rtp_info_ptr)
 {
     sip_calls_t *tapinfo = (sip_calls_t *)arg;
 
@@ -515,7 +518,7 @@ rtpsave_draw(void *arg _U_)
 {
     sip_calls_t* tapinfo = (sip_calls_t *) arg;
 
-    printf("=====RTP=====\n");
+    if(tapinfo->debug) printf("RTP draw (memory clearing and finish of the tap).\n");
     g_hash_table_destroy( tapinfo->sdp_frames );
     g_hash_table_foreach( tapinfo->payload_files, (GHFunc)sip_reset_hash_payload_files, NULL);
     g_hash_table_destroy( tapinfo->payload_files );
@@ -528,8 +531,9 @@ rtpsave_draw(void *arg _U_)
 
 static void
 rtpsave_sip_draw(void *arg _U_)
-{
-    printf("=====SIP=====\n");
+{   
+    /*sip_calls_t* tapinfo = (sip_calls_t *) arg;
+    if(tapinfo->debug)  printf("SIP draw (finish of the tap). \n");*/
     return; 
 }
 
@@ -609,15 +613,19 @@ rtp_save_init(const char *opt_arg _U_, void *userdata _U_)
     
     sip_calls.requested_calls_only = g_key_file_get_boolean(key_file, "config", "REQUESTED_CALLS_ONLY", &error);
     if(!(sip_calls.requested_calls_only) && error ) psqlerror(error->message);
+
+    sip_calls.debug = g_key_file_get_boolean(key_file, "config", "DEBUG", &error);
+    if( !(sip_calls.debug) && error ) psqlerror(error->message);
     
     sip_calls.call_timout = g_key_file_get_double(key_file, "config", "CALL_TIMEOUT", &error);
 
     g_key_file_free (key_file);
-
-    printf("path:%s\n",sip_calls.path_to_storage);
-    printf("db:%s\n",db_connection);
-    printf("requ:%d\n",sip_calls.requested_calls_only);
-    printf("tout:%f\n",sip_calls.call_timout);
+    if(sip_calls.debug){
+      printf("path:%s\n",sip_calls.path_to_storage);
+      printf("db:%s\n",db_connection);
+      printf("requ:%d\n",sip_calls.requested_calls_only);
+      printf("tout:%f\n",sip_calls.call_timout);
+    }
 
     sip_calls.conn = PQconnectdb(db_connection);
     if (PQstatus(sip_calls.conn) != CONNECTION_OK) psqlerror(PQerrorMessage(sip_calls.conn));
