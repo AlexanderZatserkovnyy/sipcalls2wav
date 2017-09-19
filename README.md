@@ -28,3 +28,11 @@ It's just run independently from a payload generator:
 inotify-payload2wav /data/pcaps1/payload /data/pcaps1/wav
 ```
 
+tap-rtpsave.c is a tap extension for tshark which working like write-splitted-voip-with-db.lua but faster. Usage:
+./tshark -n -q -r sip-rtp-g729a.pcap -z rtp,save
+./tshark -n -q -i eth0 -z rtp,save
+
+To build tshark with it, you need to put tap-rtpsave.c in the ui/cli subdirectory of wireshark sources, add it to CMakeLists.txt,ui/cli/Makefile and to ui/cli/tshark-tap-register.c  
+(or, if you want to do patching befor ./configure , to CMakeLists.txt,ui/cli/Makefile.am,ui/cli/Makefile.in and to ui/cli/tshark-tap-register.c).  
+
+Enjoy!
