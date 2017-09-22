@@ -1,6 +1,6 @@
 CC=g++
 CXXFLAGS += -g -Wall -O3 --std=c++11
-LDLIBS= -lbcg729  
+LDLIBS= -lbcg729 -lpq 
 TARGET1_SOURCES = payload2wav.cpp codecParameters.h typedef.h
 TARGET2_SOURCES = inotify-payload2wav.cpp codecParameters.h typedef.h
 TARGET1 = payload2wav

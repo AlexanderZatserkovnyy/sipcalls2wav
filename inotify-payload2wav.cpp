@@ -139,7 +139,7 @@ struct WAVHEADER
 } wavheader;
 #pragma pack(pop)
 
-int file2wav(string& payloaddir, string& filename, string& outputdir){
+int file2wav(string& payloaddir, string& filename, string& outputdir, bool debug_output){
   int16_t numChannels=1; 
   int32_t sampleRate=8000;
   int16_t bitsPerSample=8;
@@ -225,21 +225,21 @@ int file2wav(string& payloaddir, string& filename, string& outputdir){
      wav_output.write(buffer,bytes_readed);
   
   int numSamples = wavheader.subchunk2Size*8/(wavheader.numChannels*wavheader.bitsPerSample);
-  cout << output_name << " written: "<< wav_output.tellp() << " samples:" << numSamples << endl;
-  wav_output.close();
+  if(debug_output) 
+       cout << output_name << " written: "<< wav_output.tellp() << " samples:" << numSamples << endl;
   //SQL
   PGresult* res;
   string sqlrequest = "UPDATE files SET samples="+to_string(numSamples)+" WHERE filename='"+filename+"';";
   res = PQexec(conn,sqlrequest.c_str());
   if (PQresultStatus(res) != PGRES_COMMAND_OK) exiterror(PQresultErrorMessage(res));
   PQclear(res);
-
+  wav_output.close();
   //sql
   delete [] buffer;
   return 0;
 }
 
-static void handle_events(int fd, int wd, string &pl_path, string &wav_path ) {
+static void handle_events(int fd, int wd, string &pl_path, string &wav_path, bool debug_output ) {
   char buf[4096]
        __attribute__ ((aligned(__alignof__(struct inotify_event))));
 
@@ -258,7 +258,7 @@ static void handle_events(int fd, int wd, string &pl_path, string &wav_path ) {
       event = (const struct inotify_event *) ptr;
       if (event->wd == wd ){
             string filename(event->name);
-            file2wav(pl_path,filename,wav_path);
+            file2wav(pl_path,filename,wav_path,debug_output);
       }
     }
   }
@@ -272,10 +272,15 @@ int main( int argc, char** argv ) {
   if (argc > 2) wavpath=string(argv[2]);
   
   map<string,string> conf=LoadConfig(string(PATH_TO_CONF));
-  auto it=conf.find("DB_COONNECTION");
+
+  bool debug_output = 0;
+  auto it=conf.find("DEBUG");
+  if(it!=conf.end()) debug_output=stoi(it->second);
+
+  it=conf.find("DB_COONNECTION");
   if(it==conf.end()) exiterror("Can't find DB_COONNECTION configuration in the conf file "); 
   string db_connection=it->second;
-  cout << "DB:" << db_connection << endl;
+  if(debug_output) cout << "DB:" << db_connection << endl;
 
   if(argc < 3){
      it=conf.find("PATH_TO_STORAGE");
@@ -323,7 +328,7 @@ int main( int argc, char** argv ) {
            exit(EXIT_FAILURE);
       }
       if (poll_num > 0) {
-           if (fds[0].revents & POLLIN) handle_events(fd, wd, payloadpath, wavpath);
+           if (fds[0].revents & POLLIN) handle_events(fd, wd, payloadpath, wavpath, debug_output);
       }
   }
 

@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS files (
   codec character varying(4) DEFAULT '' NOT NULL,
   f_opened timestamp with time zone default now() NOT NULL,
   f_closed timestamp with time zone default now() NOT NULL,
-  filename character varying(255) DEFAULT '' NOT NULL 
+  filename character varying(255) DEFAULT '' NOT NULL,
+  samples bigint DEFAULT 0::bigint NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS requests (
