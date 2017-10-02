@@ -15,10 +15,12 @@
 #include <errno.h>
 #include <stdio.h>
 #include <math.h>
-
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <locale.h>
 #include <glib.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 
 #include <epan/packet_info.h>
 #include <epan/value_string.h>
@@ -42,16 +44,23 @@
 typedef struct _call_rec_t {
         nstime_t     pkt_ts;
         wtap_dumper* wd;
+	FILE*        ch1_fifo;
+	FILE*        ch2_fifo;
+	gboolean     opened;
+	gboolean     live;
+	gint64       first_pld_sdp_frame;
+        address      src_ip;
 } call_rec_t;
 
 typedef struct _payload_file_t {
         nstime_t  pkt_ts;
         FILE*     ph;
         PGconn*   conn;
+	gboolean  caller;
 } payload_file_t;
 
 typedef struct _sip_calls_t {
-	GHashTable*  calls;    // key - call id, value - file handler
+	GHashTable*  calls;         // key - call id, value - file handler
         GHashTable*  sdp_frames;    // key - frame number, value - call id
 	GHashTable*  payload_files; // key - string (?) call_id + ssrc + payload_type + setupframe (?) 
         guint32	     frame_num;
@@ -62,6 +71,7 @@ typedef struct _sip_calls_t {
 	gchar*       path_to_storage;
 	gboolean     requested_calls_only;
 	gdouble      call_timout;
+	gboolean     write_full_opened;
 	gboolean     debug;
 } sip_calls_t;
 
@@ -126,20 +136,39 @@ my_abs_time_to_str(const nstime_t *abs_time)
 }
 
 static void
-sip_reset_hash_calls(gchar *key _U_ , call_rec_t* call, PGconn* conn _U_ )
+sip_reset_hash_calls(gchar *key _U_ , call_rec_t* call, sip_calls_t* tapinfo _U_ )
 {       
     int err;
     if( call && call->wd ){
       wtap_dump_flush(call->wd);
       if(!wtap_dump_close(call->wd, &err)) fprintf(stderr,"%s\n",g_strerror(err));
+      if(call->live){
+        if(call->ch1_fifo){  
+	   fclose(call->ch1_fifo);
+	   if(key){
+	     gchar* fifopath=g_strconcat(tapinfo->path_to_storage,"/fifo/",key,".ch1",NULL);
+	     err=unlink(fifopath);
+	     g_free(fifopath);
+	   }
+	}
+        if(call->ch2_fifo){
+	   fclose(call->ch2_fifo);
+	   if(key){
+	     gchar* fifopath=g_strconcat(tapinfo->path_to_storage,"/fifo/",key,".ch2",NULL);
+	     err=unlink(fifopath);
+	     g_free(fifopath);
+	   }
+	}
+      }
+      if(&(call->src_ip)) free_address(&(call->src_ip));
     }
-    if( key && call && conn ){
+    if( key && call && tapinfo->conn ){
       PGresult* res;
       gchar* ts_buf = my_abs_time_to_str(&(call->pkt_ts));
       gchar* sqlrequest;
       sqlrequest=g_strdup_printf("UPDATE cdr SET disposition='UNCLOSED',duration=EXTRACT(SECOND FROM ( '%s'- calldate )) WHERE clid='%s';",
-                                       ts_buf, key);
-      res = PQexec(conn,sqlrequest);
+                                  ts_buf, key);
+      res = PQexec(tapinfo->conn,sqlrequest);
       if (PQresultStatus(res) != PGRES_COMMAND_OK) psqlerror(PQresultErrorMessage(res));
       PQclear(res);
       g_free(sqlrequest);
@@ -214,6 +243,21 @@ rm_calls_by_timeout(gpointer key, gpointer value, gpointer data)
        if(call->wd){ 
           wtap_dump_flush(call->wd);
           if(!wtap_dump_close(call->wd, &err)) fprintf(stderr,"%s\n",g_strerror(err));
+	  if(call->live){
+	    if(call->ch1_fifo){
+	      fclose(call->ch1_fifo);
+              gchar* fifopath=g_strconcat(tapinfo->path_to_storage,"/fifo/",call_id,".ch1",NULL);
+              err=unlink(fifopath);
+              g_free(fifopath);
+            } 
+            if(call->ch2_fifo){
+	      fclose(call->ch2_fifo);
+	      gchar* fifopath=g_strconcat(tapinfo->path_to_storage,"/fifo/",call_id,".ch2",NULL);
+              err=unlink(fifopath);
+              g_free(fifopath);
+	    }
+	  }
+	  if(&(call->src_ip)) free_address(&(call->src_ip));
           g_hash_table_foreach_remove(tapinfo->payload_files,(GHRFunc)payload_rm_vals,call_id);
        }
        g_hash_table_foreach_remove(tapinfo->sdp_frames,(GHRFunc)sdp_rm_vals,call_id);
@@ -281,6 +325,7 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
     guint32  cseq_number=sipinfo->tap_cseq_number;
     gchar   *request_method =g_strdup(sipinfo->request_method);
     gchar   *call_id=g_strdup(sipinfo->tap_call_id);//the key for calls hash table
+    gboolean free_callid = TRUE;
     gchar   *from_addr=g_strdup(sipinfo->tap_from_addr);;
     gchar   *to_addr=g_strdup(sipinfo->tap_to_addr);
     gchar   *reason_phrase=g_strdup(sipinfo->reason_phrase);
@@ -307,7 +352,13 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
        int encap = WTAP_ENCAP_ETHERNET;
        call = (call_rec_t*) g_new(call_rec_t,1);
        call->wd=NULL;
+       call->ch1_fifo=NULL;
+       call->ch2_fifo=NULL;
+       call->live=FALSE;
+       call->opened= (tapinfo->write_full_opened) ? FALSE : TRUE; 
+       call->first_pld_sdp_frame=-1;
        nstime_copy(&(call->pkt_ts), &(pinfo->abs_ts));
+       copy_address(&(call->src_ip),&(pinfo->src));
 
        int the_call_reqested = (tapinfo->requested_calls_only) ? 0:1; 
        /* SQL SELECT requests */ 
@@ -319,11 +370,16 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
           gchar *from = clear_sipaddr(from_addr);
 	  gchar *to = clear_sipaddr(to_addr);
 
-          sqlrequest=g_strdup_printf("SELECT id FROM requests WHERE (( abonent_id='%s' OR  abonent_id='%s' ) AND ('%s' >= int_begin AND '%s'<= int_end ));",
+          sqlrequest=g_strdup_printf("SELECT live FROM requests WHERE (( abonent_id='%s' OR  abonent_id='%s' ) AND ('%s' >= int_begin AND '%s'<= int_end ));",
                                      from,to,ts_buf,ts_buf);
 	  res=PQexec(tapinfo->conn,sqlrequest);
 	  if(PQresultStatus(res) != PGRES_TUPLES_OK) psqlerror(PQresultErrorMessage(res));
-	  if(PQntuples(res)>0) the_call_reqested=1;
+	  if(PQntuples(res)>0){ 
+	    the_call_reqested=1;
+	    int nfields=PQnfields(res);
+	    if(nfields!=1) psqlerror("Wrong fields number in the sql reply");
+            call->live = (PQgetvalue(res,0,0)[0]=='t') ? TRUE : FALSE; 
+	  }
 	  else the_call_reqested=0;
 	  g_free(sqlrequest);
 	  PQclear(res);
@@ -331,9 +387,7 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
 	  g_free(to);
        }
 
-       gchar  write_pcap[]="FALSE";
        if(the_call_reqested){
-         
          gchar* filename = g_strconcat(tapinfo->path_to_storage,"/",call_id,".pcap",NULL);
          call->wd = wtap_dump_open(filename, filetype, encap, 0, FALSE, &err);
          if(err){
@@ -341,13 +395,12 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
 	    exit(1);
          }
          g_free(filename);
-	 strncpy(write_pcap,"TRUE",5);
        }
        g_hash_table_insert(tapinfo->calls,call_id,call); 
-
+       free_callid = FALSE;
        /* SQL INSERT (INVITE) */
        sqlrequest=g_strdup_printf("INSERT INTO cdr (calldate, clid, src, dst, disposition, pcap)  VALUES ('%s','%s', '%s', '%s', 'INVITE','%s');",
-                                  ts_buf,call_id,from_addr,to_addr,write_pcap);
+                                  ts_buf,call_id,from_addr,to_addr, (the_call_reqested) ? ("TRUE"):("FALSE") );
        res = PQexec(tapinfo->conn,sqlrequest);
        if (PQresultStatus(res) != PGRES_COMMAND_OK) psqlerror(PQresultErrorMessage(res));
        PQclear(res);
@@ -380,6 +433,21 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
               if(!wtap_dump_close(call->wd, &err)){
  	         fprintf(stderr,"%s\n",g_strerror(err));
 	      }
+	      if(call->live){
+	        if(call->ch1_fifo){
+	          fclose(call->ch1_fifo);
+		  gchar* fifopath=g_strconcat(tapinfo->path_to_storage,"/fifo/",call_id,".ch1",NULL);
+                  err=unlink(fifopath);
+                  g_free(fifopath);
+	        }
+                if(call->ch2_fifo){
+	          fclose(call->ch2_fifo);
+		  gchar* fifopath=g_strconcat(tapinfo->path_to_storage,"/fifo/",call_id,".ch2",NULL);
+                  err=unlink(fifopath);
+                  g_free(fifopath);
+	        }
+	      }
+	      if(&(call->src_ip)) free_address(&(call->src_ip));
             }
             PGresult* res;
 	    gchar* sqlrequest;
@@ -408,11 +476,11 @@ rtpsave_sip_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt, void 
 	    /*clear suspended calls by  timeout*/
 	    nstime_copy(&(tapinfo->pkt_ts), &(pinfo->abs_ts));
             g_hash_table_foreach_remove(tapinfo->calls,(GHRFunc)rm_calls_by_timeout,tapinfo);
-	  } 
+	  }else if(response_code==200 && ( strcmp(cseq_method,"INVITE")==0 )) call->opened=TRUE;
         }
       }
     }
-  
+    if(free_callid) g_free(call_id);
     g_free(request_method);
     g_free(from_addr);
     g_free(to_addr);
@@ -469,10 +537,11 @@ rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt _U_, void 
     //// save the packet payload to a file
     //make payload filename
     gchar* filename = g_strdup_printf("%s_%u.%u",call_id,ssrc,payload_type); //don't free here, it's key for hash table
+    gboolean free_fn=TRUE;
     gchar* filepath = g_strconcat(tapinfo->path_to_storage,"/payload/",filename,NULL);
     payload_file_t* payload_f = (payload_file_t*) g_hash_table_lookup(tapinfo->payload_files,filename);
 
-    if(!payload_f){
+    if( !payload_f && call->opened ){
         payload_f = g_new(payload_file_t,1);
         payload_f->ph = NULL;
 	nstime_copy(&(payload_f->pkt_ts), &(pinfo->abs_ts));
@@ -481,22 +550,60 @@ rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt _U_, void 
 	    fprintf(stderr,"%s %s\n",g_strerror(errno),filepath);
 	    exit(1);
 	}
+
+        if( &(call->src_ip) && cmp_address(&(call->src_ip),&(pinfo->src))==0) payload_f->caller = TRUE;
+        else payload_f->caller = FALSE;
+
+        int err = 0; 
+	if( call->live && payload_f->caller && !call->ch1_fifo ){
+	    gchar* fifopath=g_strconcat(tapinfo->path_to_storage,"/fifo/",call_id,".ch1",NULL);
+            err=mkfifo(fifopath, 0666);
+	    if(err==-1) {
+	      fprintf(stderr,"%s\n",g_strerror(errno)); 
+	      exit(1);
+	    }
+	    int fifofd = open(fifopath, O_RDWR|O_NONBLOCK);
+            call->ch1_fifo = fdopen(fifofd,"w");
+            //call->ch1_fifo = fopen(fifopath,"rw");
+	    if(call->ch1_fifo == NULL){
+              fprintf(stderr,"%s %s\n",g_strerror(errno),fifopath);
+              exit(1);
+            }
+            g_free(fifopath);
+	}else if( call->live && !payload_f->caller && !call->ch2_fifo ){
+            gchar* fifopath=g_strconcat(tapinfo->path_to_storage,"/fifo/",call_id,".ch2",NULL);
+            err=mkfifo(fifopath, 0666);
+	    if(err==-1) {
+	      fprintf(stderr,"%s\n",g_strerror(errno)); 
+	      exit(1);
+	    }
+            int fifofd = open(fifopath, O_RDWR|O_NONBLOCK);
+            call->ch2_fifo = fdopen(fifofd,"w");  
+            //call->ch2_fifo = fopen(fifopath,"rw"); 
+	    if(call->ch2_fifo == NULL){
+              fprintf(stderr,"%s %s\n",g_strerror(errno),fifopath);
+              exit(1);
+            }
+	    g_free(fifopath);
+	}
+
 	payload_f->conn = tapinfo->conn;
 	g_hash_table_insert(tapinfo->payload_files,filename,payload_f);
-
+        free_fn=FALSE;
 	/*SQL INSERT files*/
 	PGresult* res;
 	gchar* ts_buf = my_abs_time_to_str(&pinfo->abs_ts);
 	gchar* sqlrequest;
-	sqlrequest=g_strdup_printf("INSERT INTO files (clid, ssrc, codec, f_opened, filename)  VALUES ('%s','%u', '%u', '%s', '%s');",
-                                    call_id, ssrc, payload_type, ts_buf, filename );
+	sqlrequest=g_strdup_printf( "INSERT INTO files (clid, ssrc, codec, f_opened, filename, caller)  VALUES ('%s','%u', '%u', '%s', '%s', '%s');",
+                                    call_id, ssrc, payload_type, ts_buf, filename, payload_f->caller ? ("TRUE"):("FALSE") );
+
 	res = PQexec(tapinfo->conn,sqlrequest);
 	if (PQresultStatus(res) != PGRES_COMMAND_OK) psqlerror(PQresultErrorMessage(res));
 	PQclear(res);
 	g_free(sqlrequest);
 	wmem_free(NULL,ts_buf);
 
-    }else nstime_copy(&(payload_f->pkt_ts), &(pinfo->abs_ts));
+    }else if(payload_f) nstime_copy(&(payload_f->pkt_ts), &(pinfo->abs_ts));
 
     const guint8* payload_data=rtpinfo->info_data + rtpinfo->info_payload_offset;
     guint32 payload_len=rtpinfo->info_payload_len-rtpinfo->info_padding_count;
@@ -505,7 +612,14 @@ rtpsave_packet(void *arg _U_, packet_info *pinfo, epan_dissect_t *edt _U_, void 
       size_t nchars;
       nchars=fwrite(payload_data, sizeof(unsigned char), payload_len, payload_f->ph);
       if(nchars != payload_len) fprintf(stderr," write error %s %s\n",g_strerror(errno),filepath);
+      if( call->live ){
+        if( payload_f->caller && call->ch1_fifo )
+	  nchars=fwrite(payload_data, sizeof(unsigned char), payload_len, call->ch1_fifo);
+	if(!payload_f->caller && call->ch2_fifo )   
+          nchars=fwrite(payload_data, sizeof(unsigned char), payload_len, call->ch2_fifo);
+      }
     }
+    if(free_fn) g_free(filename);
     g_free(filepath);
 
     return FALSE;
@@ -522,7 +636,7 @@ rtpsave_draw(void *arg _U_)
     g_hash_table_destroy( tapinfo->sdp_frames );
     g_hash_table_foreach( tapinfo->payload_files, (GHFunc)sip_reset_hash_payload_files, NULL);
     g_hash_table_destroy( tapinfo->payload_files );
-    g_hash_table_foreach( tapinfo->calls, (GHFunc)sip_reset_hash_calls, tapinfo->conn );
+    g_hash_table_foreach( tapinfo->calls, (GHFunc)sip_reset_hash_calls, tapinfo );
     g_hash_table_destroy( tapinfo->calls );
     if (PQstatus(tapinfo->conn) == CONNECTION_OK) PQfinish(tapinfo->conn);
     g_free(tapinfo->path_to_storage);
@@ -545,13 +659,12 @@ rtpsave_reset(void *arg _U_)
     g_hash_table_destroy( tapinfo->sdp_frames );
     g_hash_table_foreach( tapinfo->payload_files, (GHFunc)sip_reset_hash_payload_files, NULL);
     g_hash_table_destroy( tapinfo->payload_files );
-    g_hash_table_foreach( tapinfo->calls, (GHFunc)sip_reset_hash_calls, NULL);
+    g_hash_table_foreach( tapinfo->calls, (GHFunc)sip_reset_hash_calls,  tapinfo );
     g_hash_table_destroy( tapinfo->calls );
     if (PQstatus(tapinfo->conn) == CONNECTION_OK) PQfinish(tapinfo->conn);
     g_free(tapinfo->path_to_storage);
     return;
 }
-
 
 static void
 rtpsave_sip_reset(void *arg _U_)
@@ -616,7 +729,10 @@ rtp_save_init(const char *opt_arg _U_, void *userdata _U_)
 
     sip_calls.debug = g_key_file_get_boolean(key_file, "config", "DEBUG", &error);
     if( !(sip_calls.debug) && error ) psqlerror(error->message);
-    
+ 
+    sip_calls.write_full_opened = g_key_file_get_boolean(key_file, "config", "WRITE_FULL_OPENED", &error);
+    if( !(sip_calls.write_full_opened) && error ) psqlerror(error->message);
+
     sip_calls.call_timout = g_key_file_get_double(key_file, "config", "CALL_TIMEOUT", &error);
 
     g_key_file_free (key_file);
