@@ -25,9 +25,9 @@ typedef struct _wav_file_info {
   uint32_t samples;
 } wav_file_info;
 
-void exiterror(char *mess)
+void exiterror(string mess)
 {
-  cerr << string(mess) << endl;
+  cerr << mess << endl;
   exit(1);
 }
 
