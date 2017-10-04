@@ -16,13 +16,6 @@
 #include <libpq-fe.h>
 
 
-extern "C"
-{
-#include <bcg729/decoder.h>
-#include "typedef.h"
-#include "codecParameters.h"
-}
-
 using namespace std;
 
 const char* usage = "<path-to-payload-dir> <path-to-wav-dir>\n";
