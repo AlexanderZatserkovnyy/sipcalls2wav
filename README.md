@@ -3,8 +3,10 @@ VOIP calls to an external program (like sox or ffmpeg).
 
 Usage:
 ```
-tshark -n -q -r PCAPs/sip-rtp-g729a.pcap -Xlua_script:write-splitted-voip-with-db.lua
+tshark -n -q -i eth0 -z rtp,save
+tshark -n -q -r /PCAPs/SIP_CALLS_RTP_G711 -z rtp,save
 tshark -n -q -ieth0 -Xlua_script:write-splitted-voip-with-db.lua
+tshark -n -q -r /PCAPs/SIP_CALLS_RTP_G729 -Xlua_script:write-splitted-voip-with-db.lua
 ```
 
 write-splitted-voip-with-db.lua refers to ./payload2wav . ./payload2wav converts rtp payload to a wav file.
@@ -28,13 +30,7 @@ It's just run independently from a payload generator:
 ```
 inotify-payload2wav /data/pcaps1/payload /data/pcaps1/wav
 ```
-
-tap-rtpsave.c is a tap extension for tshark which working like write-splitted-voip-with-db.lua but faster. Usage:
-```
-./tshark -n -q -r sip-rtp-g729a.pcap -z rtp,save
-./tshark -n -q -i eth0 -z rtp,save
-```
-
+tap-rtpsave.c is a tap extension for tshark which working like write-splitted-voip-with-db.lua but is more elaborated and faster. Usage:
 To build tshark with it, you need to put tap-rtpsave.c in the ui/cli subdirectory of wireshark sources, add it to CMakeLists.txt,ui/cli/Makefile and to ui/cli/tshark-tap-register.c  
 (or, if you want to do patching before ./configure , to CMakeLists.txt,ui/cli/Makefile.am,ui/cli/Makefile.in and to ui/cli/tshark-tap-register.c). You need also add libpq to tshark 
 building (e.g add -lpq to LIBS = -lz -lm in wireshark-2.4.1/Makefile ).
