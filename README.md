@@ -1,4 +1,5 @@
-SIP calls to wavs 
+SIP calls to separate pcaps,payloads,wavs. There is a possibility to mark a SIP number as "live" for piping it's 
+VOIP calls to an external program (like sox or ffmpeg).
 
 Usage:
 ```
@@ -35,6 +36,7 @@ tap-rtpsave.c is a tap extension for tshark which working like write-splitted-vo
 ```
 
 To build tshark with it, you need to put tap-rtpsave.c in the ui/cli subdirectory of wireshark sources, add it to CMakeLists.txt,ui/cli/Makefile and to ui/cli/tshark-tap-register.c  
-(or, if you want to do patching before ./configure , to CMakeLists.txt,ui/cli/Makefile.am,ui/cli/Makefile.in and to ui/cli/tshark-tap-register.c).  
+(or, if you want to do patching before ./configure , to CMakeLists.txt,ui/cli/Makefile.am,ui/cli/Makefile.in and to ui/cli/tshark-tap-register.c). You need also add libpq to tshark 
+building (e.g add -lpq to LIBS = -lz -lm in wireshark-2.4.1/Makefile ).
 
 Enjoy!
